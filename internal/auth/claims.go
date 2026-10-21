@@ -15,6 +15,7 @@ type Claims struct {
 	Issuer            string   `json:"iss"`
 	Subject           string   `json:"sub"`
 	Audience          []string `json:"-"`
+	AuthorizedParty   string   `json:"azp,omitempty"`
 	ExpiresAt         int64    `json:"exp"`
 	IssuedAt          int64    `json:"iat"`
 	NotBefore         int64    `json:"nbf"`
@@ -28,6 +29,7 @@ type claimsAlias struct {
 	Issuer            string          `json:"iss"`
 	Subject           string          `json:"sub"`
 	Audience          json.RawMessage `json:"aud"`
+	AuthorizedParty   string          `json:"azp,omitempty"`
 	ExpiresAt         int64           `json:"exp"`
 	IssuedAt          int64           `json:"iat"`
 	NotBefore         int64           `json:"nbf"`
@@ -45,6 +47,7 @@ func (c *Claims) UnmarshalJSON(data []byte) error {
 
 	c.Issuer = aux.Issuer
 	c.Subject = aux.Subject
+	c.AuthorizedParty = aux.AuthorizedParty
 	c.ExpiresAt = aux.ExpiresAt
 	c.IssuedAt = aux.IssuedAt
 	c.NotBefore = aux.NotBefore
