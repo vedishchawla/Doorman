@@ -39,6 +39,7 @@ type AuthenticatorConfig struct {
 	ClientSecret string
 	RedirectURL  string
 	CookieSecret []byte
+	CookieSecure bool
 	HTTPClient   *http.Client
 }
 
@@ -107,6 +108,7 @@ func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
+		Secure:   a.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -197,7 +199,7 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if maxAge <= 0 {
 		maxAge = 1 * time.Hour
 	}
-	SetSessionCookie(w, tokenToValidate, a.cfg.CookieSecret, maxAge)
+	SetSessionCookie(w, tokenToValidate, a.cfg.CookieSecret, maxAge, a.cfg.CookieSecure)
 
 	slog.Info("user successfully authenticated", "sub", claims.Subject, "email", claims.Email, "roles", claims.Roles)
 	http.Redirect(w, r, targetURL, http.StatusFound)

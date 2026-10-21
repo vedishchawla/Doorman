@@ -36,6 +36,7 @@ func main() {
 		ClientSecret: cfg.OIDCClientSecret,
 		RedirectURL:  cfg.OIDCRedirectURL,
 		CookieSecret: []byte(cfg.CookieSecret),
+		CookieSecure: cfg.CookieSecure,
 	}
 
 	authenticator, err := auth.NewAuthenticator(ctx, authCfg)

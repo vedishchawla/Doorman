@@ -59,7 +59,7 @@ func VerifyValue(signedValue string, secret []byte) (string, error) {
 }
 
 // SetSessionCookie sets the signed session cookie.
-func SetSessionCookie(w http.ResponseWriter, token string, secret []byte, maxAge time.Duration) {
+func SetSessionCookie(w http.ResponseWriter, token string, secret []byte, maxAge time.Duration, secure bool) {
 	signedVal := SignValue(token, secret)
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
@@ -67,7 +67,7 @@ func SetSessionCookie(w http.ResponseWriter, token string, secret []byte, maxAge
 		Path:     "/",
 		MaxAge:   int(maxAge.Seconds()),
 		HttpOnly: true,
-		Secure:   false, // Can be true if behind TLS proxy, or dynamically set
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

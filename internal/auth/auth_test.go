@@ -3,9 +3,11 @@ package auth
 import (
 	"context"
 	"crypto"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -521,5 +523,269 @@ func TestJWKS_KeyRotation(t *testing.T) {
 	}
 	if parsedClaims.Subject != "bob" {
 		t.Errorf("expected subject 'bob', got %q", parsedClaims.Subject)
+	}
+}
+
+func TestJWT_UnsupportedAlgorithmsAndUnknownKid(t *testing.T) {
+	fake := newFakeOIDCServer(t)
+	defer fake.server.Close()
+
+	cookieSecret := []byte("secret-key-that-is-at-least-32-bytes-long!")
+	authCfg := AuthenticatorConfig{
+		IssuerURL:    fake.server.URL,
+		ClientID:     "zt-proxy",
+		ClientSecret: "dev-secret",
+		RedirectURL:  "https://localhost/auth/callback",
+		CookieSecret: cookieSecret,
+		HTTPClient:   fake.server.Client(),
+	}
+
+	authenticator, err := NewAuthenticator(context.Background(), authCfg)
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	now := time.Now().Unix()
+	claims := Claims{
+		Issuer:    fake.server.URL,
+		Subject:   "attacker",
+		Audience:  []string{"zt-proxy"},
+		ExpiresAt: now + 300,
+	}
+	claimsJSON, _ := json.Marshal(claims)
+	payloadPart := base64.RawURLEncoding.EncodeToString(claimsJSON)
+
+	// 1. alg: "none"
+	t.Run("alg none is rejected", func(t *testing.T) {
+		noneHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","kid":"key-1","typ":"JWT"}`))
+		noneToken := noneHeader + "." + payloadPart + "."
+
+		_, err := authenticator.validator.Validate(context.Background(), noneToken)
+		if err == nil {
+			t.Fatal("expected error for alg 'none', got nil")
+		}
+		if !strings.Contains(err.Error(), "expected RS256") {
+			t.Errorf("expected error mentioning RS256, got %v", err)
+		}
+	})
+
+	// 2. alg: "HS256" signed with the RSA public key (algorithm confusion attack)
+	t.Run("alg HS256 signed with public key is rejected", func(t *testing.T) {
+		hsHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","kid":"key-1","typ":"JWT"}`))
+		signingInput := hsHeader + "." + payloadPart
+
+		pubKeyBytes, err := x509.MarshalPKIXPublicKey(fake.privKey.Public())
+		if err != nil {
+			t.Fatalf("failed to marshal public key: %v", err)
+		}
+
+		mac := hmac.New(sha256.New, pubKeyBytes)
+		mac.Write([]byte(signingInput))
+		sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+		hsToken := signingInput + "." + sig
+		_, err = authenticator.validator.Validate(context.Background(), hsToken)
+		if err == nil {
+			t.Fatal("expected error for alg 'HS256', got nil")
+		}
+		if !strings.Contains(err.Error(), "expected RS256") {
+			t.Errorf("expected error mentioning RS256, got %v", err)
+		}
+	})
+
+	// 3. Unknown kid
+	t.Run("unknown kid fails closed", func(t *testing.T) {
+		unknownKidHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"nonexistent-kid-999","typ":"JWT"}`))
+		signingInput := unknownKidHeader + "." + payloadPart
+
+		digest := sha256.Sum256([]byte(signingInput))
+		sigBytes, _ := rsa.SignPKCS1v15(rand.Reader, fake.privKey, crypto.SHA256, digest[:])
+		sig := base64.RawURLEncoding.EncodeToString(sigBytes)
+
+		unknownKidToken := signingInput + "." + sig
+		_, err := authenticator.validator.Validate(context.Background(), unknownKidToken)
+		if err == nil {
+			t.Fatal("expected error for unknown kid, got nil")
+		}
+	})
+
+	// 4. Empty kid
+	t.Run("empty kid fails closed", func(t *testing.T) {
+		emptyKidHeader := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"","typ":"JWT"}`))
+		signingInput := emptyKidHeader + "." + payloadPart
+
+		digest := sha256.Sum256([]byte(signingInput))
+		sigBytes, _ := rsa.SignPKCS1v15(rand.Reader, fake.privKey, crypto.SHA256, digest[:])
+		sig := base64.RawURLEncoding.EncodeToString(sigBytes)
+
+		emptyKidToken := signingInput + "." + sig
+		_, err := authenticator.validator.Validate(context.Background(), emptyKidToken)
+		if err == nil {
+			t.Fatal("expected error for empty kid, got nil")
+		}
+	})
+}
+
+func TestCallback_StateValidation(t *testing.T) {
+	fake := newFakeOIDCServer(t)
+	defer fake.server.Close()
+
+	cookieSecret := []byte("secret-key-that-is-at-least-32-bytes-long!")
+	authCfg := AuthenticatorConfig{
+		IssuerURL:    fake.server.URL,
+		ClientID:     "zt-proxy",
+		ClientSecret: "dev-secret",
+		RedirectURL:  "https://localhost/auth/callback",
+		CookieSecret: cookieSecret,
+		HTTPClient:   fake.server.Client(),
+	}
+
+	authenticator, err := NewAuthenticator(context.Background(), authCfg)
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	stateCookieVal := SignValue("expected-state-value|/dashboard", cookieSecret)
+
+	// Case 1: Missing state query parameter
+	t.Run("missing state query parameter", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/callback?code=mock-code", nil)
+		req.AddCookie(&http.Cookie{
+			Name:  StateCookieName,
+			Value: stateCookieVal,
+		})
+		rec := httptest.NewRecorder()
+		authenticator.HandleCallback(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for missing state param, got %d", rec.Code)
+		}
+	})
+
+	// Case 2: Missing state cookie
+	t.Run("missing state cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/callback?code=mock-code&state=expected-state-value", nil)
+		rec := httptest.NewRecorder()
+		authenticator.HandleCallback(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for missing state cookie, got %d", rec.Code)
+		}
+	})
+
+	// Case 3: Mismatched state parameter
+	t.Run("mismatched state parameter", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/auth/callback?code=mock-code&state=wrong-state-value", nil)
+		req.AddCookie(&http.Cookie{
+			Name:  StateCookieName,
+			Value: stateCookieVal,
+		})
+		rec := httptest.NewRecorder()
+		authenticator.HandleCallback(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for mismatched state, got %d", rec.Code)
+		}
+	})
+}
+
+func TestLogin_RedirectParameterSanitization(t *testing.T) {
+	// Unit tests for SanitizeRedirectURI directly
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"valid relative root", "/", "/"},
+		{"valid relative path", "/dashboard", "/dashboard"},
+		{"valid relative nested path with query", "/api/v1/resource?id=123", "/api/v1/resource?id=123"},
+		{"empty string falls back to /", "", "/"},
+		{"protocol relative //host rejected", "//evil.com", "/"},
+		{"protocol relative //host/path rejected", "//evil.com/phish", "/"},
+		{"backslash /\\host rejected", "/\\evil.com", "/"},
+		{"backslash /\\\\host rejected", "/\\\\evil.com", "/"},
+		{"absolute http URL rejected", "http://evil.com", "/"},
+		{"absolute https URL rejected", "https://evil.com/login", "/"},
+		{"javascript scheme rejected", "javascript:alert(1)", "/"},
+		{"relative path with no leading slash rejected", "dashboard", "/"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeRedirectURI(tc.input)
+			if got != tc.expected {
+				t.Errorf("SanitizeRedirectURI(%q) = %q, expected %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+
+	// Integration test with HandleLogin
+	fake := newFakeOIDCServer(t)
+	defer fake.server.Close()
+
+	cookieSecret := []byte("secret-key-that-is-at-least-32-bytes-long!")
+	authCfg := AuthenticatorConfig{
+		IssuerURL:    fake.server.URL,
+		ClientID:     "zt-proxy",
+		ClientSecret: "dev-secret",
+		RedirectURL:  "https://localhost/auth/callback",
+		CookieSecret: cookieSecret,
+		HTTPClient:   fake.server.Client(),
+	}
+
+	authenticator, err := NewAuthenticator(context.Background(), authCfg)
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	loginTests := []struct {
+		name           string
+		queryRedirect  string
+		expectedTarget string
+	}{
+		{"protocol relative //attacker.com falls back to /", "//attacker.com", "/"},
+		{"protocol relative /\\attacker.com falls back to /", "/\\attacker.com", "/"},
+		{"absolute URL falls back to /", "https://attacker.com/steal", "/"},
+		{"valid relative path preserved", "/user/profile", "/user/profile"},
+	}
+
+	for _, tc := range loginTests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/auth/login?redirect="+url.QueryEscape(tc.queryRedirect), nil)
+			rec := httptest.NewRecorder()
+			authenticator.HandleLogin(rec, req)
+
+			if rec.Code != http.StatusFound {
+				t.Fatalf("expected 302, got %d", rec.Code)
+			}
+
+			// Inspect the set state cookie to verify target was sanitized
+			var stateCookie *http.Cookie
+			for _, c := range rec.Result().Cookies() {
+				if c.Name == StateCookieName {
+					stateCookie = c
+					break
+				}
+			}
+			if stateCookie == nil {
+				t.Fatal("expected state cookie to be set")
+			}
+
+			payload, err := VerifyValue(stateCookie.Value, cookieSecret)
+			if err != nil {
+				t.Fatalf("failed to verify state cookie: %v", err)
+			}
+
+			parts := strings.SplitN(payload, "|", 2)
+			if len(parts) != 2 {
+				t.Fatalf("invalid payload format: %q", payload)
+			}
+			if parts[1] != tc.expectedTarget {
+				t.Errorf("expected target %q in cookie payload, got %q", tc.expectedTarget, parts[1])
+			}
+		})
 	}
 }

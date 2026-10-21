@@ -13,6 +13,7 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 	CookieSecret     string
+	CookieSecure     bool
 	BackendAURL      string
 	BackendBURL      string
 }
@@ -27,6 +28,7 @@ func LoadFromEnv() (*Config, error) {
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8081/auth/callback"),
 		CookieSecret:     os.Getenv("COOKIE_SECRET"),
+		CookieSecure:     getEnv("COOKIE_SECURE", "false") == "true",
 		BackendAURL:      getEnv("BACKEND_A_URL", "http://backend-a:8080"),
 		BackendBURL:      getEnv("BACKEND_B_URL", "http://backend-b:8080"),
 	}

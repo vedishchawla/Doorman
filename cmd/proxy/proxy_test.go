@@ -295,3 +295,83 @@ func TestProxyRouter_ForwardingWithIdentityHeaders(t *testing.T) {
 		t.Errorf("expected backend 'backend-b', got %v", resB["backend"])
 	}
 }
+
+func TestProxyRouter_HeaderSpoofingProtection(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	cfg := &config.Config{
+		BackendAURL:      rig.backendA.URL,
+		BackendBURL:      rig.backendB.URL,
+		OIDCIssuerURL:    rig.fakeOIDC.URL,
+		OIDCClientID:     "zt-proxy",
+		OIDCClientSecret: "secret",
+		OIDCRedirectURL:  "https://localhost/auth/callback",
+		CookieSecret:     cookieSecret,
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	router, err := NewProxyRouter(cfg, authenticator)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	// Token with only viewer role
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "bob",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "bob",
+		Roles:             []string{"viewer"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	// Client sends spoofed header: X-Roles: admin, X-User: root
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+	req.Header.Set("X-Roles", "admin")
+	req.Header.Set("X-User", "root")
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Backend must see the viewer role and bob user, not spoofed headers
+	if res["roles"] != "viewer" {
+		t.Errorf("expected downstream to see roles 'viewer', got %v", res["roles"])
+	}
+	if res["user"] != "bob" {
+		t.Errorf("expected downstream to see user 'bob', got %v", res["user"])
+	}
+}

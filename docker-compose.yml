@@ -64,6 +64,8 @@ services:
       dockerfile: Dockerfile
     environment:
       BACKEND_NAME: backend-a
+    ports:
+      - "8082:8080"
     healthcheck:
       test: ["CMD", "/backend", "healthcheck"]
       interval: 5s
@@ -78,6 +80,8 @@ services:
       dockerfile: Dockerfile
     environment:
       BACKEND_NAME: backend-b
+    ports:
+      - "8083:8080"
     healthcheck:
       test: ["CMD", "/backend", "healthcheck"]
       interval: 5s

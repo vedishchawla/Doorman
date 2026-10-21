@@ -28,10 +28,12 @@
       "clientAuthenticatorType": "client-secret",
       "secret": "zt-proxy-dev-secret",
       "redirectUris": [
-        "https://localhost/auth/callback"
+        "https://localhost/auth/callback",
+        "http://localhost:8081/auth/callback"
       ],
       "webOrigins": [
-        "https://localhost"
+        "https://localhost",
+        "http://localhost:8081"
       ],
       "protocol": "openid-connect",
       "standardFlowEnabled": true,
