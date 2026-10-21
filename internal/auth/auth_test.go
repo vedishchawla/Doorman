@@ -176,7 +176,7 @@ func TestOIDC_FullBrowserFlow(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -299,7 +299,7 @@ func TestOIDC_APIRequests_401JSON(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -364,7 +364,7 @@ func TestOIDC_InvalidTokens(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -483,7 +483,7 @@ func TestJWKS_KeyRotation(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -534,7 +534,7 @@ func TestJWT_UnsupportedAlgorithmsAndUnknownKid(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -635,7 +635,7 @@ func TestCallback_StateValidation(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),
@@ -729,7 +729,7 @@ func TestLogin_RedirectParameterSanitization(t *testing.T) {
 	authCfg := AuthenticatorConfig{
 		IssuerURL:    fake.server.URL,
 		ClientID:     "zt-proxy",
-		ClientSecret: "dev-secret",
+		ClientSecret: "test-client-secret-mock",
 		RedirectURL:  "https://localhost/auth/callback",
 		CookieSecret: cookieSecret,
 		HTTPClient:   fake.server.Client(),

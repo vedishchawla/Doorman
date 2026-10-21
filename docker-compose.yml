@@ -5,7 +5,7 @@ services:
     command: start-dev --import-realm
     environment:
       KC_HEALTH_ENABLED: "true"
-      KC_HOSTNAME: keycloak
+      KC_HOSTNAME: localhost
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
     volumes:
@@ -98,7 +98,8 @@ services:
   #   environment:
   #     OIDC_ISSUER_URL: http://keycloak:8080/realms/zt
   #     OIDC_CLIENT_ID: zt-proxy
-  #     OIDC_CLIENT_SECRET: zt-proxy-dev-secret
+  #     OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+  #     COOKIE_SECRET: ${COOKIE_SECRET}
   #     OPA_URL: http://opa:8181
   #     BACKEND_URL: http://backend-a:8080
   #   ports:

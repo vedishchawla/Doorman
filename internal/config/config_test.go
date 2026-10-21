@@ -7,7 +7,7 @@ import (
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("OIDC_CLIENT_SECRET", "dev-secret-value-12345")
+	t.Setenv("OIDC_CLIENT_SECRET", "test-mock-client-secret")
 	t.Setenv("COOKIE_SECRET", "super-secret-cookie-key-at-least-32-bytes!")
 }
 
@@ -28,7 +28,7 @@ func TestLoadFromEnv_ValidDefaults(t *testing.T) {
 	if cfg.OIDCClientID != "zt-proxy" {
 		t.Errorf("expected default OIDCClientID 'zt-proxy', got %q", cfg.OIDCClientID)
 	}
-	if cfg.OIDCClientSecret != "dev-secret-value-12345" {
+	if cfg.OIDCClientSecret != "test-mock-client-secret" {
 		t.Errorf("expected OIDCClientSecret to match env, got %q", cfg.OIDCClientSecret)
 	}
 }

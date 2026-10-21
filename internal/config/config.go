@@ -23,7 +23,7 @@ type Config struct {
 func LoadFromEnv() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:       getEnv("PROXY_LISTEN_ADDR", ":8081"),
-		OIDCIssuerURL:    getEnv("OIDC_ISSUER_URL", "http://keycloak:8080/realms/zt"),
+		OIDCIssuerURL:    getEnv("OIDC_ISSUER_URL", "http://localhost:8080/realms/zt"),
 		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "zt-proxy"),
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8081/auth/callback"),
