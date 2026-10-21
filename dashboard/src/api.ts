@@ -1,4 +1,4 @@
-import { AuditEntry, PolicyInput, PolicyEvaluationResult, BenchmarkRow } from './types';
+import { AuditEntry, PolicyInput, PolicyEvaluationResult, BenchmarkRow, SimulationResult } from './types';
 
 // Fallback audit entries if server has no log file
 export const SAMPLE_AUDIT_ENTRIES: AuditEntry[] = [
@@ -434,4 +434,86 @@ export function formatLocalTimestamp(ts?: string): string {
   } catch {
     return ts.replace('T', ' ').substring(0, 19);
   }
+}
+
+export async function dispatchLiveRequest(params: {
+  user: string;
+  posture: string;
+  target: string;
+  method: string;
+}): Promise<SimulationResult> {
+  try {
+    const res = await fetch('/api/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {}
+
+  // Fallback if standalone without Vite middleware
+  const isAnon = params.user === 'anonymous';
+  const isMissingPosture = params.posture === 'missing';
+  const isBadPosture = params.posture === 'unhealthy_disk' || params.posture === 'unhealthy_firewall';
+  const isBobAdmin = params.user === 'bob' && params.target.startsWith('/backend-a/admin');
+
+  let statusCode = 200;
+  let statusText = '200 OK';
+  let decision: 'allow' | 'deny' = 'allow';
+  let reason = '';
+  let step = 6;
+
+  if (isAnon) {
+    statusCode = 401;
+    statusText = '401 Unauthorized';
+    decision = 'deny';
+    reason = 'authentication failed: missing Bearer token';
+    step = 2;
+  } else if (isMissingPosture) {
+    statusCode = 403;
+    statusText = '403 Forbidden';
+    decision = 'deny';
+    reason = 'invalid device posture token: missing posture token';
+    step = 3;
+  } else if (isBadPosture) {
+    statusCode = 403;
+    statusText = '403 Forbidden';
+    decision = 'deny';
+    reason = 'Denied: device is not compliant: disk is not encrypted';
+    step = 4;
+  } else if (isBobAdmin) {
+    statusCode = 403;
+    statusText = '403 Forbidden';
+    decision = 'deny';
+    reason = 'Denied: viewer cannot access /admin paths';
+    step = 4;
+  }
+
+  return {
+    status: statusCode,
+    statusText,
+    decision,
+    reason,
+    step,
+    steps: [
+      { step: 1, name: 'Request Ingress', subsystem: 'nginx / cmd/proxy', status: 'pass', details: 'TLS terminated on port 443', latency_ms: 0.05 },
+      { step: 2, name: 'OIDC Authentication', subsystem: 'internal/auth', status: isAnon ? 'fail' : 'pass', details: isAnon ? 'Missing token' : `Identity verified: ${params.user}`, latency_ms: 0.12 },
+      { step: 3, name: 'Device Posture', subsystem: 'internal/posture', status: isMissingPosture ? 'fail' : (isAnon ? 'skipped' : 'pass'), details: isMissingPosture ? 'Missing posture header' : 'ES256 signature verified', latency_ms: 0.08 },
+      { step: 4, name: 'OPA Policy Evaluation', subsystem: 'internal/policy', status: (isBadPosture || isBobAdmin) ? 'fail' : ((isAnon || isMissingPosture) ? 'skipped' : 'pass'), details: reason || '0 denials', latency_ms: 1.45 },
+      { step: 5, name: 'Decision Gate', subsystem: 'cmd/proxy', status: decision === 'allow' ? 'pass' : 'fail', details: decision === 'allow' ? 'Allowed' : 'Blocked', latency_ms: 0.02 },
+      { step: 6, name: 'mTLS Upstream Forwarding', subsystem: 'internal/mtls', status: decision === 'allow' ? 'pass' : 'skipped', details: decision === 'allow' ? 'mTLS established' : 'Skipped', latency_ms: 1.62 },
+      { step: 7, name: 'Async Audit Log', subsystem: 'internal/audit', status: 'pass', details: 'Audit record appended', latency_ms: 0.04 },
+    ],
+    responseBody: decision === 'allow' ? JSON.stringify({ backend: 'backend-a', headers: { 'X-User': params.user } }, null, 2) : JSON.stringify({ error: 'forbidden', reason }, null, 2),
+    curlCommand: `curl -k -i https://localhost${params.target}`,
+    mtlsInfo: {
+      clientCert: 'certs/proxy-client.crt (CN=doorman-proxy, Internal CA Signed)',
+      serverCert: 'certs/backend-a.crt (CN=backend-a, Internal CA Signed)',
+      tlsVersion: 'TLSv1.3',
+      cipherSuite: 'TLS_AES_128_GCM_SHA256'
+    },
+    total_ms: 2.15,
+  };
 }

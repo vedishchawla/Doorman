@@ -16,6 +16,7 @@ export const Navigation: React.FC<Props> = ({
 }) => {
   const pages: { id: PageId; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    { id: 'simulator', label: 'Live Simulator' },
     { id: 'audit', label: 'Audit Log' },
     { id: 'policy-tester', label: 'Policy Tester' },
     { id: 'benchmarks', label: 'Benchmarks' },

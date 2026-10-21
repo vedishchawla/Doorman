@@ -6,6 +6,7 @@ import { AuditLogPage } from './pages/AuditLogPage';
 import { PolicyTesterPage } from './pages/PolicyTesterPage';
 import { BenchmarksPage } from './pages/BenchmarksPage';
 import { AboutPage } from './pages/AboutPage';
+import { SimulatorPage } from './pages/SimulatorPage';
 
 export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<PageId>('overview');
@@ -35,7 +36,8 @@ export const App: React.FC = () => {
       />
 
       <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
-        {activePage === 'overview' && <OverviewPage />}
+        {activePage === 'overview' && <OverviewPage onNavigate={setActivePage} />}
+        {activePage === 'simulator' && <SimulatorPage />}
         {activePage === 'audit' && <AuditLogPage />}
         {activePage === 'policy-tester' && <PolicyTesterPage />}
         {activePage === 'benchmarks' && <BenchmarksPage />}

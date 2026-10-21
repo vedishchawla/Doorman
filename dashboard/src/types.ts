@@ -63,4 +63,31 @@ export interface BenchmarkRow {
   cache_enabled: boolean;
 }
 
-export type PageId = 'overview' | 'audit' | 'policy-tester' | 'benchmarks' | 'about';
+export interface SimulationStep {
+  step: number;
+  name: string;
+  subsystem: string;
+  status: 'pass' | 'fail' | 'pending' | 'skipped';
+  details: string;
+  latency_ms: number;
+}
+
+export interface SimulationResult {
+  status: number;
+  statusText: string;
+  decision: 'allow' | 'deny';
+  reason: string;
+  step: number;
+  steps: SimulationStep[];
+  responseBody: string;
+  curlCommand: string;
+  mtlsInfo: {
+    clientCert: string;
+    serverCert: string;
+    tlsVersion: string;
+    cipherSuite: string;
+  };
+  total_ms: number;
+}
+
+export type PageId = 'overview' | 'simulator' | 'audit' | 'policy-tester' | 'benchmarks' | 'about';

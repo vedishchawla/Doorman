@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { AuditEntry } from '../types';
+import { AuditEntry, PageId } from '../types';
 import { fetchAuditEntries, formatLocalTimestamp } from '../api';
 import { StatusIndicator } from '../components/StatusIndicator';
 import { SampleTag } from '../components/SampleTag';
 
-export const OverviewPage: React.FC = () => {
+interface Props {
+  onNavigate?: (page: PageId) => void;
+}
+
+export const OverviewPage: React.FC<Props> = ({ onNavigate }) => {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [isSample, setIsSample] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -42,12 +46,12 @@ export const OverviewPage: React.FC = () => {
   const p95Upstream = calcP95(entries.map((e) => e.upstream_ms || 0));
 
   const components = [
-    { name: 'Proxy Ingress', status: 'ONLINE', port: '8080/443', detail: 'Fail-closed routing' },
-    { name: 'Keycloak OIDC', status: 'ONLINE', port: '8080/9000', detail: 'Realm zt (RS256)' },
-    { name: 'Open Policy Agent', status: 'ONLINE', port: '8181', detail: 'Package zt.authz' },
-    { name: 'Backend A', status: 'ONLINE', port: '8080', detail: 'mTLS verification required' },
-    { name: 'Backend B', status: 'ONLINE', port: '8080', detail: 'mTLS verification required' },
-    { name: 'Audit Log Sink', status: 'ONLINE', port: 'local/fs', detail: 'audit-logs/audit.jsonl' },
+    { name: 'Proxy Ingress', pkg: 'cmd/proxy', status: 'ONLINE', port: '8080/443', detail: 'Fail-closed routing, TLS termination' },
+    { name: 'Keycloak OIDC', pkg: 'internal/auth', status: 'ONLINE', port: '8080/9000', detail: 'Realm zt (RS256 JWT, JWKS verification)' },
+    { name: 'Open Policy Agent', pkg: 'internal/policy', status: 'ONLINE', port: '8181', detail: 'Package zt.authz (Rego policy engine)' },
+    { name: 'Backend A', pkg: 'internal/mtls', status: 'ONLINE', port: '8080', detail: 'mTLS verification required (24h certs)' },
+    { name: 'Backend B', pkg: 'internal/mtls', status: 'ONLINE', port: '8080', detail: 'mTLS verification required (24h certs)' },
+    { name: 'Audit Log Sink', pkg: 'internal/audit', status: 'ONLINE', port: 'local/fs', detail: 'audit-logs/audit.jsonl & Prometheus :9090' },
   ];
 
   return (
@@ -131,6 +135,59 @@ export const OverviewPage: React.FC = () => {
         </div>
       </div>
 
+      {/* 7-Step Pipeline Flow Diagram Bar */}
+      <div className="border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-2">
+          <div>
+            <h2 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 font-mono uppercase tracking-wide">
+              Zero-Trust Verification Pipeline (7 Stages)
+            </h2>
+            <p className="text-[11px] text-neutral-500 font-mono mt-0.5">
+              Every request to microservices undergoes this sequential evaluation
+            </p>
+          </div>
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('simulator')}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white font-mono text-xs font-semibold transition flex items-center gap-1.5 self-start sm:self-auto"
+            >
+              <span>▶ LAUNCH INTERACTIVE SIMULATOR</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 text-xs font-mono">
+          {[
+            { step: 1, name: 'Request Ingress', pkg: 'nginx / proxy', desc: 'TLS termination' },
+            { step: 2, name: 'OIDC Identity', pkg: 'internal/auth', desc: 'Keycloak RS256' },
+            { step: 3, name: 'Device Posture', pkg: 'internal/posture', desc: 'ES256 hardware' },
+            { step: 4, name: 'OPA Evaluation', pkg: 'internal/policy', desc: 'Rego REST rules' },
+            { step: 5, name: 'Decision Gate', pkg: 'cmd/proxy', desc: 'Fail-closed logic' },
+            { step: 6, name: 'mTLS Upstream', pkg: 'internal/mtls', desc: 'Client certs (24h)' },
+            { step: 7, name: 'Async Audit', pkg: 'internal/audit', desc: 'JSONL & :9090' },
+          ].map((st) => (
+            <div
+              key={st.step}
+              className="p-2 border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between text-[10px] text-neutral-500 font-bold mb-1">
+                  <span>STEP {st.step}</span>
+                  <span className="text-emerald-600 dark:text-emerald-400">ACTIVE</span>
+                </div>
+                <div className="font-semibold text-neutral-900 dark:text-neutral-100 text-[11px] leading-tight">
+                  {st.name}
+                </div>
+              </div>
+              <div className="mt-2 pt-1 border-t border-neutral-200 dark:border-neutral-800 text-[10px] text-neutral-500 flex flex-col">
+                <span className="text-neutral-600 dark:text-neutral-400 font-mono truncate">{st.pkg}</span>
+                <span className="text-[9px] text-neutral-400 truncate">{st.desc}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Infrastructure Components Table */}
       <div>
         <div className="border-b border-neutral-300 dark:border-neutral-800 pb-2 mb-2 flex items-center justify-between">
@@ -144,6 +201,7 @@ export const OverviewPage: React.FC = () => {
             <thead>
               <tr className="border-b border-neutral-300 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800/60 font-mono text-neutral-600 dark:text-neutral-400">
                 <th className="py-2 px-3 font-medium">COMPONENT</th>
+                <th className="py-2 px-3 font-medium">GO PACKAGE</th>
                 <th className="py-2 px-3 font-medium">STATUS</th>
                 <th className="py-2 px-3 font-medium">BIND PORT</th>
                 <th className="py-2 px-3 font-medium">SPECIFICATION</th>
@@ -153,6 +211,7 @@ export const OverviewPage: React.FC = () => {
               {components.map((c) => (
                 <tr key={c.name} className="hover:bg-neutral-50 dark:hover:bg-neutral-800/40">
                   <td className="py-2 px-3 font-semibold text-neutral-900 dark:text-neutral-100">{c.name}</td>
+                  <td className="py-2 px-3 text-neutral-500 text-[11px]">`{c.pkg}`</td>
                   <td className="py-2 px-3">
                     <span className="inline-flex items-center gap-1 text-status-allow dark:text-status-allow-dark">
                       <span className="w-1.5 h-1.5 bg-status-allow dark:bg-status-allow-dark inline-block"></span>
