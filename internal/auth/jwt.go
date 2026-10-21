@@ -119,7 +119,7 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 		return nil, fmt.Errorf("%w: expected %q, got %q", ErrInvalidIssuer, v.issuer, claims.Issuer)
 	}
 
-	// Validate aud
+	// Validate aud (also accept azp / authorized party, which Keycloak uses for access tokens)
 	if v.audience != "" {
 		audMatched := false
 		for _, aud := range claims.Audience {
@@ -128,10 +128,11 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 				break
 			}
 		}
+		if !audMatched && claims.AuthorizedParty == v.audience {
+			audMatched = true
+		}
 		if !audMatched {
-			// In Keycloak, client_id might be in "azp" (authorized party) or audience might be account.
-			// If aud doesn't match directly, check if audience list was empty or didn't contain audience.
-			return nil, fmt.Errorf("%w: expected %q in %v", ErrInvalidAudience, v.audience, claims.Audience)
+			return nil, fmt.Errorf("%w: expected %q in aud %v or azp %q", ErrInvalidAudience, v.audience, claims.Audience, claims.AuthorizedParty)
 		}
 	}
 
