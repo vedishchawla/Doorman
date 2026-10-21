@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vedishchawla/doorman/internal/audit"
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
 	"github.com/vedishchawla/doorman/internal/policy"
@@ -76,6 +77,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	auditFile, err := os.OpenFile(cfg.AuditLogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		slog.Error("failed to open audit log", "path", cfg.AuditLogFile, "error", err)
+		os.Exit(1)
+	}
+	metrics := audit.NewMetrics()
+	auditLogger := audit.NewLogger(auditFile, cfg.AuditBufferSize, cfg.AuditRecentSize, metrics)
+	defer func() {
+		if err := auditLogger.Shutdown(); err != nil {
+			slog.Error("failed to flush audit log", "error", err)
+		}
+		_ = auditFile.Close()
+	}()
+	router.SetObservability(auditLogger, metrics)
+
+	metricsServer := &http.Server{
+		Addr:    ":9090",
+		Handler: http.HandlerFunc(metrics.MetricsHandler),
+	}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server stopped with error", "error", err)
+		}
+	}()
+
 	server := &http.Server{
 		Addr:         cfg.ListenAddr,
 		Handler:      router.Handler(),
@@ -112,6 +138,9 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server graceful shutdown failed", "error", err)
+	}
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("metrics server shutdown failed", "error", err)
 	}
 	slog.Info("proxy server stopped cleanly")
 }

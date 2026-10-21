@@ -94,6 +94,31 @@ For Compose, put the public key in the ignored `.env` file as
 `POSTURE_PUBLIC_KEY='...'`; the Compose configuration refuses to start if it
 is missing.
 
+The Compose demo uses `DEV_DEFAULT_COUNTRY=IN`; this is a fixed development
+default, not a client geolocation lookup.
+
+### Audit and Metrics
+
+Requests are written as JSON lines to `AUDIT_LOG_FILE` (Compose uses
+`/var/log/doorman/audit.jsonl`, mounted from the ignored `audit-logs/`
+directory). Entries include request identity, decision, policy, device ID,
+step, and auth/OPA/upstream latency. Tokens, cookies, posture headers, and
+query strings are never recorded.
+
+Prometheus metrics are available on the separate proxy metrics listener:
+
+```sh
+curl http://localhost:9090/metrics
+```
+
+The recent audit API is restricted to authenticated users with the `admin`
+role:
+
+```sh
+curl -H "Authorization: Bearer <alice-token>" \
+  'https://localhost/api/audit?decision=deny'
+```
+
 ### Internal mTLS
 
 Generate the short-lived internal CA, proxy client certificate, and backend

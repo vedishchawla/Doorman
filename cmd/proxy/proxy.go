@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vedishchawla/doorman/internal/audit"
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
 	"github.com/vedishchawla/doorman/internal/mtls"
@@ -29,6 +30,14 @@ type ProxyRouter struct {
 	policyClient  *policy.Client
 	policyCfg     policyConfig
 	counter       uint64
+	auditLogger   *audit.Logger
+	metrics       *audit.Metrics
+}
+
+// SetObservability configures asynchronous audit logging and Prometheus metrics.
+func (pr *ProxyRouter) SetObservability(logger *audit.Logger, metrics *audit.Metrics) {
+	pr.auditLogger = logger
+	pr.metrics = metrics
 }
 
 // policyConfig holds policy-related configuration for the proxy.
@@ -163,14 +172,24 @@ func (pr *ProxyRouter) Handler() http.Handler {
 
 	// Protected backend proxy handler
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		state, _ := audit.StateFromContext(r.Context())
+		start := time.Now()
 		// Route selection:
 		// 1. Explicit path prefix
 		if strings.HasPrefix(r.URL.Path, "/backend-a") || strings.HasPrefix(r.URL.Path, "/a/") {
 			pr.proxyA.ServeHTTP(w, r)
+			if state != nil {
+				state.UpstreamMS = float64(time.Since(start).Microseconds()) / 1000
+				state.Step = 6
+			}
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/backend-b") || strings.HasPrefix(r.URL.Path, "/b/") {
 			pr.proxyB.ServeHTTP(w, r)
+			if state != nil {
+				state.UpstreamMS = float64(time.Since(start).Microseconds()) / 1000
+				state.Step = 6
+			}
 			return
 		}
 
@@ -179,10 +198,18 @@ func (pr *ProxyRouter) Handler() http.Handler {
 		targetQuery := strings.ToLower(r.URL.Query().Get("backend"))
 		if targetHeader == "backend-b" || targetQuery == "b" || targetQuery == "backend-b" {
 			pr.proxyB.ServeHTTP(w, r)
+			if state != nil {
+				state.UpstreamMS = float64(time.Since(start).Microseconds()) / 1000
+				state.Step = 6
+			}
 			return
 		}
 		if targetHeader == "backend-a" || targetQuery == "a" || targetQuery == "backend-a" {
 			pr.proxyA.ServeHTTP(w, r)
+			if state != nil {
+				state.UpstreamMS = float64(time.Since(start).Microseconds()) / 1000
+				state.Step = 6
+			}
 			return
 		}
 
@@ -193,22 +220,118 @@ func (pr *ProxyRouter) Handler() http.Handler {
 		} else {
 			pr.proxyB.ServeHTTP(w, r)
 		}
+		if state != nil {
+			state.UpstreamMS = float64(time.Since(start).Microseconds()) / 1000
+			state.Step = 6
+		}
 	})
 
 	// Wrap proxy handler with policy check, then auth middleware
 	policyWrapped := pr.policyMiddleware(proxyHandler)
 
-	// All protected routes go through the auth middleware
-	mux.Handle("/", pr.authenticator.Middleware(policyWrapped))
+	// The audit endpoint is authenticated but does not audit itself.
+	mux.Handle("/api/audit", pr.authenticator.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pr.auditLogger == nil {
+			http.Error(w, "audit logging unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		claims, ok := auth.ClaimsFromContext(r.Context())
+		if !ok || claims == nil || !containsRole(claims.Roles, "admin") {
+			if state, ok := audit.StateFromContext(r.Context()); ok {
+				state.Decision, state.Reason, state.PolicyID, state.Step = "deny", "admin role required", "audit-admin-required", 3
+			}
+			http.Error(w, "admin role required", http.StatusForbidden)
+			return
+		}
+		pr.auditLogger.AuditHandler(w, r)
+	})))
 
-	return mux
+	// All protected routes go through the auth middleware and audit middleware.
+	protected := pr.authenticator.Middleware(policyWrapped)
+	mux.Handle("/", protected)
+	return pr.auditMiddleware(mux)
+}
+
+func containsRole(roles []string, want string) bool {
+	for _, role := range roles {
+		if role == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (pr *ProxyRouter) auditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pr.auditLogger == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		state := audit.NewRequestState(r)
+		r = audit.WithState(r, state)
+		recorder := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims != nil {
+			state.User = claims.PreferredUsername
+			state.Roles = append([]string(nil), claims.Roles...)
+		}
+		if state.Decision == "" {
+			if recorder.status >= http.StatusOK && recorder.status < http.StatusMultipleChoices {
+				state.Decision = "allow"
+			} else {
+				state.Decision = "deny"
+			}
+		}
+		if state.Reason == "" && state.Decision == "deny" {
+			state.Reason = "authentication failed"
+			state.PolicyID = "authentication"
+		}
+		if state.AuthMS == 0 {
+			state.AuthMS = float64(time.Since(state.StartedAt).Microseconds()) / 1000
+		}
+		pr.auditLogger.Record(audit.Entry{
+			Timestamp: time.Now().UTC(), RequestID: state.RequestID, User: state.User,
+			Roles: state.Roles, Resource: state.Resource, Method: state.Method,
+			Decision: state.Decision, Reason: state.Reason, PolicyID: state.PolicyID,
+			ClientIP: state.ClientIP, Geo: state.Geo, DeviceID: state.DeviceID,
+			Step: state.Step, AuthMS: state.AuthMS, OPAMS: state.OPAMS, UpstreamMS: state.UpstreamMS,
+		})
+		if pr.metrics != nil {
+			pr.metrics.Observe(state.Decision, *state)
+		}
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
 }
 
 // policyMiddleware evaluates OPA policy after authentication.
 func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		state, _ := audit.StateFromContext(r.Context())
+		if state != nil {
+			state.AuthMS = float64(time.Since(state.StartedAt).Microseconds()) / 1000
+			state.Step = 2
+		}
 		claims, ok := auth.ClaimsFromContext(r.Context())
 		if !ok || claims == nil {
+			if state != nil {
+				state.Decision, state.Reason, state.PolicyID, state.Step = "deny", "missing claims", "internal-error", 3
+			}
 			// Should not happen — auth middleware runs first
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -230,7 +353,15 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 		if pr.policyCfg.DevDefaultCountry != "" {
 			geo = pr.policyCfg.DevDefaultCountry
 		}
+		if state != nil {
+			state.Geo = geo
+			state.User = claims.PreferredUsername
+			state.Roles = append([]string(nil), claims.Roles...)
+		}
 		if geo == "" {
+			if state != nil {
+				state.Decision, state.Reason, state.PolicyID, state.Step = "deny", "missing geo", "missing-geo", 3
+			}
 			slog.Warn("policy denied: missing geo", "user", claims.PreferredUsername, "path", cleanedPath)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -246,6 +377,9 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 			tokenHeader := r.Header.Get("X-Device-Posture")
 			pc, err := pr.policyCfg.PostureVerifier.Verify(tokenHeader)
 			if err != nil {
+				if state != nil {
+					state.Decision, state.Reason, state.PolicyID, state.Step = "deny", "invalid device posture token: "+err.Error(), "invalid-posture-token", 3
+				}
 				slog.Warn("policy denied: posture token invalid",
 					"user", claims.PreferredUsername,
 					"path", cleanedPath,
@@ -267,6 +401,9 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 				FirewallOn:     pc.FirewallOn,
 				OSPatchAgeDays: pc.OSPatchAgeDays,
 			}
+			if state != nil {
+				state.DeviceID = pc.DeviceID
+			}
 		} else if pr.policyCfg.PostureDisabled && pr.policyCfg.DevDefaultPosture != nil {
 			// No verifier: use dev default if set
 			policyPosture = &policy.DevicePosture{
@@ -278,6 +415,9 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 
 		// Fail closed: missing posture means deny
 		if policyPosture == nil {
+			if state != nil {
+				state.Decision, state.Reason, state.PolicyID, state.Step = "deny", "missing device posture", "missing-posture", 3
+			}
 			slog.Warn("policy denied: missing device posture", "user", claims.PreferredUsername, "path", cleanedPath)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -298,9 +438,20 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 			DevicePosture: policyPosture,
 		}
 
+		opaStart := time.Now()
 		decision, _ := pr.policyClient.Evaluate(r.Context(), input)
+		if state != nil {
+			state.OPAMS = float64(time.Since(opaStart).Microseconds()) / 1000
+			state.Step = 4
+			state.Decision = "allow"
+			state.Reason = decision.Reason
+			state.PolicyID = decision.PolicyID
+		}
 
 		if !decision.Allow {
+			if state != nil {
+				state.Decision = "deny"
+			}
 			slog.Warn("policy denied request",
 				"user", input.User,
 				"resource", input.Resource,

@@ -45,6 +45,11 @@ type Config struct {
 	// Posture token verification
 	PosturePublicKey string
 	PostureDisabled  bool
+
+	// Audit and observability
+	AuditLogFile    string
+	AuditBufferSize int
+	AuditRecentSize int
 }
 
 // LoadFromEnv loads configuration from environment variables.
@@ -122,6 +127,15 @@ func LoadFromEnv() (*Config, error) {
 	// Posture verification is enabled unless explicitly disabled.
 	cfg.PosturePublicKey = os.Getenv("POSTURE_PUBLIC_KEY")
 	cfg.PostureDisabled = getEnv("POSTURE_DISABLED", "false") == "true"
+	cfg.AuditLogFile = getEnv("AUDIT_LOG_FILE", "audit.log")
+	cfg.AuditBufferSize, err = strconv.Atoi(getEnv("AUDIT_BUFFER_SIZE", "256"))
+	if err != nil || cfg.AuditBufferSize < 1 {
+		return nil, fmt.Errorf("invalid AUDIT_BUFFER_SIZE")
+	}
+	cfg.AuditRecentSize, err = strconv.Atoi(getEnv("AUDIT_RECENT_SIZE", "1000"))
+	if err != nil || cfg.AuditRecentSize < 1 {
+		return nil, fmt.Errorf("invalid AUDIT_RECENT_SIZE")
+	}
 
 	return cfg, nil
 }
