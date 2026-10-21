@@ -14,6 +14,7 @@ import (
 
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
+	"github.com/vedishchawla/doorman/internal/mtls"
 	"github.com/vedishchawla/doorman/internal/policy"
 	"github.com/vedishchawla/doorman/internal/posture"
 )
@@ -81,6 +82,16 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *p
 
 	r.proxyA = r.createReverseProxy(urlA, "backend-a")
 	r.proxyB = r.createReverseProxy(urlB, "backend-b")
+	if cfg.MTLSCAFile != "" || cfg.MTLSClientCertFile != "" || cfg.MTLSClientKeyFile != "" {
+		transport, err := mtls.NewTransport(mtls.Config{
+			CAFile: cfg.MTLSCAFile, ClientCertFile: cfg.MTLSClientCertFile, ClientKeyFile: cfg.MTLSClientKeyFile,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("invalid mTLS configuration: %w", err)
+		}
+		r.proxyA.Transport = transport
+		r.proxyB.Transport = transport.Clone()
+	}
 
 	return r, nil
 }

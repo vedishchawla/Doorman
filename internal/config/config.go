@@ -27,6 +27,9 @@ type Config struct {
 	CookieSecure     bool
 	BackendAURL      string
 	BackendBURL      string
+	MTLSCAFile       string
+	MTLSClientCertFile string
+	MTLSClientKeyFile  string
 
 	// Policy / OPA
 	OPAURL             string
@@ -56,6 +59,9 @@ func LoadFromEnv() (*Config, error) {
 		CookieSecure:     getEnv("COOKIE_SECURE", "false") == "true",
 		BackendAURL:      getEnv("BACKEND_A_URL", "http://backend-a:8080"),
 		BackendBURL:      getEnv("BACKEND_B_URL", "http://backend-b:8080"),
+		MTLSCAFile:       os.Getenv("MTLS_CA_FILE"),
+		MTLSClientCertFile: os.Getenv("MTLS_CLIENT_CERT_FILE"),
+		MTLSClientKeyFile:  os.Getenv("MTLS_CLIENT_KEY_FILE"),
 		OPAURL:           getEnv("OPA_URL", "http://localhost:8181"),
 	}
 
