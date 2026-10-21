@@ -18,6 +18,7 @@ import (
 // DevicePosture represents device security posture information.
 type DevicePosture struct {
 	DiskEncrypted  bool `json:"disk_encrypted"`
+	FirewallOn     bool `json:"firewall_on"`
 	OSPatchAgeDays int  `json:"os_patch_age_days"`
 }
 

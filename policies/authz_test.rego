@@ -16,6 +16,7 @@ base_input := {
 	"time": "10:00",
 	"device_posture": {
 		"disk_encrypted": true,
+		"firewall_on": true,
 		"os_patch_age_days": 5,
 	},
 }
@@ -141,13 +142,13 @@ test_allowed_country_ca if {
 # ------------------------------------------------
 test_disk_not_encrypted_denied if {
 	not authz.allow with input as object.union(base_input, {
-		"device_posture": {"disk_encrypted": false, "os_patch_age_days": 5},
+		"device_posture": {"disk_encrypted": false, "firewall_on": true, "os_patch_age_days": 5},
 	})
 }
 
 test_disk_not_encrypted_denial_message if {
 	d := authz.denials with input as object.union(base_input, {
-		"device_posture": {"disk_encrypted": false, "os_patch_age_days": 5},
+		"device_posture": {"disk_encrypted": false, "firewall_on": true, "os_patch_age_days": 5},
 	})
 	some denial in d
 	denial.rule_id == "disk-not-encrypted"
@@ -158,13 +159,13 @@ test_disk_not_encrypted_denial_message if {
 # ------------------------------------------------
 test_os_patch_stale_denied if {
 	not authz.allow with input as object.union(base_input, {
-		"device_posture": {"disk_encrypted": true, "os_patch_age_days": 31},
+		"device_posture": {"disk_encrypted": true, "firewall_on": true, "os_patch_age_days": 31},
 	})
 }
 
 test_os_patch_stale_denial_message if {
 	d := authz.denials with input as object.union(base_input, {
-		"device_posture": {"disk_encrypted": true, "os_patch_age_days": 45},
+		"device_posture": {"disk_encrypted": true, "firewall_on": true, "os_patch_age_days": 45},
 	})
 	some denial in d
 	denial.rule_id == "os-patch-stale"
@@ -173,7 +174,7 @@ test_os_patch_stale_denial_message if {
 # OS patch at exactly 30 should be allowed
 test_os_patch_at_30_allowed if {
 	authz.allow with input as object.union(base_input, {
-		"device_posture": {"disk_encrypted": true, "os_patch_age_days": 30},
+		"device_posture": {"disk_encrypted": true, "firewall_on": true, "os_patch_age_days": 30},
 	})
 }
 
@@ -226,11 +227,32 @@ test_multiple_denials_sorted if {
 		"roles": ["viewer"],
 		"method": "POST",
 		"time": "22:00",
-		"device_posture": {"disk_encrypted": false, "os_patch_age_days": 5},
+		"device_posture": {"disk_encrypted": false, "firewall_on": true, "os_patch_age_days": 5},
 	})
 	d := authz.denials with input as inp
 	count(d) >= 3
 	# policy_id should be the first by sorted rule_id
 	pid := authz.policy_id with input as inp
 	pid == "disk-not-encrypted"
+}
+
+# ------------------------------------------------
+# Firewall off denied
+# ------------------------------------------------
+test_firewall_off_denied if {
+	not authz.allow with input as object.union(base_input, {
+		"device_posture": {"disk_encrypted": true, "firewall_on": false, "os_patch_age_days": 5},
+	})
+}
+
+test_firewall_off_denial_message if {
+	d := authz.denials with input as object.union(base_input, {
+		"device_posture": {"disk_encrypted": true, "firewall_on": false, "os_patch_age_days": 5},
+	})
+	some denial in d
+	denial.rule_id == "firewall-off"
+}
+
+test_firewall_on_passes if {
+	authz.allow with input as base_input
 }

@@ -21,6 +21,11 @@ denials contains {"rule_id": "disk-not-encrypted", "message": "Denied: disk is n
 	input.device_posture.disk_encrypted == false
 }
 
+# Device posture: firewall must be enabled
+denials contains {"rule_id": "firewall-off", "message": "Denied: firewall is not enabled"} if {
+	input.device_posture.firewall_on == false
+}
+
 # Device posture: OS patch age must be ≤ 30 days
 denials contains {"rule_id": "os-patch-stale", "message": concat("", ["Denied: OS patch age ", format_int(input.device_posture.os_patch_age_days, 10), " days exceeds 30 day limit"])} if {
 	input.device_posture.os_patch_age_days > 30

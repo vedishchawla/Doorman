@@ -15,6 +15,7 @@ import (
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
 	"github.com/vedishchawla/doorman/internal/policy"
+	"github.com/vedishchawla/doorman/internal/posture"
 )
 
 // ProxyRouter manages routing and reverse proxying to backend-a and backend-b.
@@ -34,6 +35,7 @@ type policyConfig struct {
 	TZ                *time.Location
 	DevDefaultCountry string
 	DevDefaultPosture *config.DevicePostureDefault
+	PostureVerifier   *posture.Verifier // nil = posture verification disabled
 }
 
 // NewProxyRouter initializes reverse proxies for both backends.
@@ -63,6 +65,15 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *p
 		r.policyCfg.DevDefaultPosture = cfg.DevDefaultPosture
 	}
 
+	// Wire posture verifier if public key is configured
+	if cfg.PosturePublicKey != "" {
+		v, err := posture.NewVerifier(cfg.PosturePublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid POSTURE_PUBLIC_KEY: %w", err)
+		}
+		r.policyCfg.PostureVerifier = v
+	}
+
 	r.proxyA = r.createReverseProxy(urlA, "backend-a")
 	r.proxyB = r.createReverseProxy(urlB, "backend-b")
 
@@ -84,6 +95,7 @@ func (pr *ProxyRouter) createReverseProxy(target *url.URL, targetName string) *h
 		req.Header.Del("X-Email")
 		req.Header.Del("X-Roles")
 		req.Header.Del("X-Subject")
+		req.Header.Del("X-Device-Posture") // never forward raw posture token to backend
 
 		// Inject identity claims from request context if authenticated
 		if claims, ok := auth.ClaimsFromContext(req.Context()); ok && claims != nil {
@@ -199,24 +211,45 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 			geo = pr.policyCfg.DevDefaultCountry
 		}
 
-		// Device posture: use dev default if set
-		var posture *policy.DevicePosture
-		if pr.policyCfg.DevDefaultPosture != nil {
-			posture = &policy.DevicePosture{
+		// Device posture: prefer verified JWT from header; fall back to dev default
+		var policyPosture *policy.DevicePosture
+
+		if pr.policyCfg.PostureVerifier != nil {
+			// Verifier configured: header is required
+			tokenHeader := r.Header.Get("X-Device-Posture")
+			pc, err := pr.policyCfg.PostureVerifier.Verify(tokenHeader)
+			if err != nil {
+				slog.Warn("policy denied: posture token invalid",
+					"user", claims.PreferredUsername,
+					"path", cleanedPath,
+					"error", err.Error(),
+				)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				resp := map[string]string{
+					"error":     "forbidden",
+					"reason":    "invalid device posture token: " + err.Error(),
+					"policy_id": "invalid-posture-token",
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			policyPosture = &policy.DevicePosture{
+				DiskEncrypted:  pc.DiskEncrypted,
+				FirewallOn:     pc.FirewallOn,
+				OSPatchAgeDays: pc.OSPatchAgeDays,
+			}
+		} else if pr.policyCfg.DevDefaultPosture != nil {
+			// No verifier: use dev default if set
+			policyPosture = &policy.DevicePosture{
 				DiskEncrypted:  pr.policyCfg.DevDefaultPosture.DiskEncrypted,
+				FirewallOn:     pr.policyCfg.DevDefaultPosture.FirewallOn,
 				OSPatchAgeDays: pr.policyCfg.DevDefaultPosture.OSPatchAgeDays,
 			}
 		}
 
-		// Fail closed: missing geo or posture means deny without calling OPA
-		if geo == "" {
-			slog.Warn("policy denied: missing geo information", "user", claims.PreferredUsername, "path", cleanedPath)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"forbidden","reason":"missing geo information","policy_id":"missing-geo"}`))
-			return
-		}
-		if posture == nil {
+		// Fail closed: missing posture means deny
+		if policyPosture == nil {
 			slog.Warn("policy denied: missing device posture", "user", claims.PreferredUsername, "path", cleanedPath)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)

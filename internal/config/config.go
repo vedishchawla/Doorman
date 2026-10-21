@@ -12,6 +12,7 @@ import (
 // DevicePostureDefault holds default device posture for local development.
 type DevicePostureDefault struct {
 	DiskEncrypted  bool `json:"disk_encrypted"`
+	FirewallOn     bool `json:"firewall_on"`
 	OSPatchAgeDays int  `json:"os_patch_age_days"`
 }
 
@@ -36,6 +37,9 @@ type Config struct {
 	// Dev-only defaults (logged as warnings if set)
 	DevDefaultCountry string
 	DevDefaultPosture *DevicePostureDefault
+
+	// Posture token verification
+	PosturePublicKey string // PEM-encoded ES256 public key; empty = posture verification disabled
 }
 
 // LoadFromEnv loads configuration from environment variables.
@@ -105,6 +109,9 @@ func LoadFromEnv() (*Config, error) {
 		}
 		cfg.DevDefaultPosture = &dp
 	}
+
+	// Posture public key (optional)
+	cfg.PosturePublicKey = os.Getenv("POSTURE_PUBLIC_KEY")
 
 	return cfg, nil
 }
