@@ -1,4 +1,8 @@
-.PHONY: up down test bench certs
+.PHONY: up down test unit-test bench certs
+
+# Run unit tests across all packages (uses local go if installed, falls back to Docker Go container).
+unit-test:
+	@which go >/dev/null 2>&1 && go test -v ./... || docker run --rm -v "$$(pwd):/app" -w /app golang:1.22.8-alpine3.20 go test -v ./...
 
 # Generate self-signed TLS certs for nginx (idempotent).
 certs:
@@ -13,8 +17,9 @@ up: certs
 down:
 	docker compose down -v
 
-# Smoke-test: show container status and hit each service from the host.
-test:
+# Run unit tests and smoke-test running services.
+test: unit-test
+	@echo ""
 	@echo "=== Container status ==="
 	@docker compose ps
 	@echo ""

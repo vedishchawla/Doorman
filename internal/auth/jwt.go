@@ -65,7 +65,11 @@ func (v *Validator) Validate(ctx context.Context, tokenString string) (*Claims, 
 	}
 
 	if header.Alg != "RS256" {
-		return nil, fmt.Errorf("%w: expected RS256, got %s", ErrUnsupportedAlg, header.Alg)
+		return nil, fmt.Errorf("%w: expected RS256, got %q", ErrUnsupportedAlg, header.Alg)
+	}
+
+	if header.Kid == "" {
+		return nil, fmt.Errorf("%w: kid cannot be empty", ErrUnsupportedAlg)
 	}
 
 	// Fetch public key

@@ -88,10 +88,7 @@ func (a *Authenticator) Close() {
 
 // HandleLogin initiates the OIDC authorization code flow.
 func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	target := r.URL.Query().Get("redirect")
-	if target == "" || !strings.HasPrefix(target, "/") {
-		target = "/"
-	}
+	target := SanitizeRedirectURI(r.URL.Query().Get("redirect"))
 
 	stateBytes := make([]byte, 16)
 	if _, err := rand.Read(stateBytes); err != nil {
@@ -162,7 +159,7 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		a.writeUnauthorized(w, r, "state mismatch")
 		return
 	}
-	targetURL := parts[1]
+	targetURL := SanitizeRedirectURI(parts[1])
 
 	// Clear state cookie
 	http.SetCookie(w, &http.Cookie{
@@ -339,4 +336,22 @@ func fetchDiscovery(ctx context.Context, client *http.Client, issuerURL string) 
 	}
 
 	return &disco, nil
+}
+
+// SanitizeRedirectURI ensures the redirect target is a safe relative path starting with a single "/".
+// It rejects "//host", "/\host", and absolute URLs, falling back to "/".
+func SanitizeRedirectURI(target string) string {
+	if target == "" {
+		return "/"
+	}
+	// Must start with "/" and must not start with "//" or "/\"
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.HasPrefix(target, "/\\") {
+		return "/"
+	}
+	// Parse with url.Parse: must not be an absolute URL or contain a host
+	u, err := url.Parse(target)
+	if err != nil || u.IsAbs() || u.Host != "" {
+		return "/"
+	}
+	return target
 }

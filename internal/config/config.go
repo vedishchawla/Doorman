@@ -17,34 +17,41 @@ type Config struct {
 	BackendBURL      string
 }
 
-// LoadFromEnv loads configuration from environment variables, applying sensible defaults.
+// LoadFromEnv loads configuration from environment variables.
+// Required variables must be set with no defaults; missing or empty values will return an error.
 func LoadFromEnv() (*Config, error) {
 	cfg := &Config{
-		ListenAddr:       getEnv("PROXY_LISTEN_ADDR", ":8080"),
+		ListenAddr:       getEnv("PROXY_LISTEN_ADDR", ":8081"),
 		OIDCIssuerURL:    getEnv("OIDC_ISSUER_URL", "http://keycloak:8080/realms/zt"),
 		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "zt-proxy"),
-		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", "zt-proxy-dev-secret"),
-		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "https://localhost/auth/callback"),
-		CookieSecret:     getEnv("COOKIE_SECRET", "dev-cookie-secret-min-32-chars-long!"),
+		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8081/auth/callback"),
+		CookieSecret:     os.Getenv("COOKIE_SECRET"),
 		BackendAURL:      getEnv("BACKEND_A_URL", "http://backend-a:8080"),
 		BackendBURL:      getEnv("BACKEND_B_URL", "http://backend-b:8080"),
 	}
 
 	if cfg.OIDCClientID == "" {
-		return nil, errors.New("OIDC_CLIENT_ID cannot be empty")
+		return nil, errors.New("OIDC_CLIENT_ID is required")
 	}
 	if cfg.OIDCIssuerURL == "" {
-		return nil, errors.New("OIDC_ISSUER_URL cannot be empty")
+		return nil, errors.New("OIDC_ISSUER_URL is required")
 	}
-	if len(cfg.CookieSecret) < 16 {
-		return nil, errors.New("COOKIE_SECRET must be at least 16 characters long")
+	if cfg.OIDCClientSecret == "" {
+		return nil, errors.New("OIDC_CLIENT_SECRET is required with no default")
+	}
+	if cfg.CookieSecret == "" {
+		return nil, errors.New("COOKIE_SECRET is required with no default")
+	}
+	if len([]byte(cfg.CookieSecret)) < 32 {
+		return nil, errors.New("COOKIE_SECRET must be at least 32 bytes")
 	}
 
 	return cfg, nil
 }
 
 func getEnv(key, defaultVal string) string {
-	if v, exists := os.LookupEnv(key); exists && v != "" {
+	if v, exists := os.LookupEnv(key); exists {
 		return v
 	}
 	return defaultVal
