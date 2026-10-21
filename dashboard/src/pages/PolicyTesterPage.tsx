@@ -222,14 +222,6 @@ export const PolicyTesterPage: React.FC = () => {
   const [result, setResult] = useState<PolicyEvaluationResult | null>(null);
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
 
-  // Evaluate on load
-  React.useEffect(() => {
-    try {
-      const parsed = JSON.parse(jsonInput);
-      evaluatePolicy(parsed).then(setResult);
-    } catch (err) {}
-  }, []);
-
   const handlePresetChange = (presetId: string) => {
     setSelectedPreset(presetId);
     const p = PRESETS.find((x) => x.id === presetId);
@@ -237,7 +229,7 @@ export const PolicyTesterPage: React.FC = () => {
       const text = JSON.stringify(p.input, null, 2);
       setJsonInput(text);
       setJsonError(null);
-      evaluatePolicy(p.input).then(setResult);
+      setResult(null);
     }
   };
 
