@@ -9,8 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
