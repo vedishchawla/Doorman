@@ -31,6 +31,14 @@ make test    # shows container status and smoke-tests each service
 make down    # tears everything down
 ```
 
+### Security Operations Dashboard
+
+```bash
+cd dashboard
+npm install   # or bun install
+npm run dev   # runs console at http://localhost:3000
+```
+
 ### Default Credentials
 
 | Service  | Username | Password | Notes                        |
