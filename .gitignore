@@ -5,6 +5,8 @@
 # TLS certs (generated)
 nginx/certs/*.crt
 nginx/certs/*.key
+certs/mtls/*.crt
+certs/mtls/*.key
 
 # Audit logs
 audit-logs/

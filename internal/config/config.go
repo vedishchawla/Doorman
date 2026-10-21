@@ -18,18 +18,19 @@ type DevicePostureDefault struct {
 
 // Config holds runtime configuration for the proxy.
 type Config struct {
-	ListenAddr       string
-	OIDCIssuerURL    string
-	OIDCClientID     string
-	OIDCClientSecret string
-	OIDCRedirectURL  string
-	CookieSecret     string
-	CookieSecure     bool
-	BackendAURL      string
-	BackendBURL      string
-	MTLSCAFile       string
+	ListenAddr         string
+	OIDCIssuerURL      string
+	OIDCClientID       string
+	OIDCClientSecret   string
+	OIDCRedirectURL    string
+	CookieSecret       string
+	CookieSecure       bool
+	BackendAURL        string
+	BackendBURL        string
+	MTLSCAFile         string
 	MTLSClientCertFile string
 	MTLSClientKeyFile  string
+	MTLSDisabled       bool
 
 	// Policy / OPA
 	OPAURL             string
@@ -50,19 +51,20 @@ type Config struct {
 // Required variables must be set with no defaults; missing or empty values will return an error.
 func LoadFromEnv() (*Config, error) {
 	cfg := &Config{
-		ListenAddr:       getEnv("PROXY_LISTEN_ADDR", ":8081"),
-		OIDCIssuerURL:    getEnv("OIDC_ISSUER_URL", "http://localhost:8080/realms/zt"),
-		OIDCClientID:     getEnv("OIDC_CLIENT_ID", "zt-proxy"),
-		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
-		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URL", "http://localhost:8081/auth/callback"),
-		CookieSecret:     os.Getenv("COOKIE_SECRET"),
-		CookieSecure:     getEnv("COOKIE_SECURE", "false") == "true",
-		BackendAURL:      getEnv("BACKEND_A_URL", "http://backend-a:8080"),
-		BackendBURL:      getEnv("BACKEND_B_URL", "http://backend-b:8080"),
-		MTLSCAFile:       os.Getenv("MTLS_CA_FILE"),
+		ListenAddr:         getEnv("PROXY_LISTEN_ADDR", ":8081"),
+		OIDCIssuerURL:      getEnv("OIDC_ISSUER_URL", "http://localhost:8080/realms/zt"),
+		OIDCClientID:       getEnv("OIDC_CLIENT_ID", "zt-proxy"),
+		OIDCClientSecret:   os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:    getEnv("OIDC_REDIRECT_URL", "http://localhost:8081/auth/callback"),
+		CookieSecret:       os.Getenv("COOKIE_SECRET"),
+		CookieSecure:       getEnv("COOKIE_SECURE", "false") == "true",
+		BackendAURL:        getEnv("BACKEND_A_URL", "https://backend-a:8080"),
+		BackendBURL:        getEnv("BACKEND_B_URL", "https://backend-b:8080"),
+		MTLSCAFile:         os.Getenv("MTLS_CA_FILE"),
 		MTLSClientCertFile: os.Getenv("MTLS_CLIENT_CERT_FILE"),
 		MTLSClientKeyFile:  os.Getenv("MTLS_CLIENT_KEY_FILE"),
-		OPAURL:           getEnv("OPA_URL", "http://localhost:8181"),
+		MTLSDisabled:       getEnv("MTLS_DISABLED", "false") == "true",
+		OPAURL:             getEnv("OPA_URL", "http://localhost:8181"),
 	}
 
 	if cfg.OIDCClientID == "" {

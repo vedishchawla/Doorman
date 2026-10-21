@@ -82,7 +82,8 @@ func NewTransport(cfg Config) (*http.Transport, error) {
 	}
 
 	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // VerifyConnection performs certificate and hostname validation with reloaded roots.
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			if err := reload(); err != nil {
 				return nil, err

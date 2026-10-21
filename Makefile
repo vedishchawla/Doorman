@@ -1,4 +1,4 @@
-.PHONY: up down test unit-test bench certs
+.PHONY: up down test unit-test bench certs mtls-certs
 
 # Run unit tests across all packages (uses local go if installed, falls back to Docker Go container).
 unit-test:
@@ -8,6 +8,10 @@ unit-test:
 certs:
 	@chmod +x nginx/certs/generate.sh
 	@nginx/certs/generate.sh
+
+mtls-certs:
+	@chmod +x scripts/gen-certs.sh
+	@scripts/gen-certs.sh
 
 # Build images, generate certs, and start all services.
 up: certs

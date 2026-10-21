@@ -180,6 +180,7 @@ func (tr *testRig) newRouterWithPolicy(t *testing.T, opaHandler http.Handler) (*
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            tr.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		PostureDisabled:   true,
 		DevDefaultCountry: "IN",
 		DevDefaultPosture: &config.DevicePostureDefault{
@@ -429,6 +430,7 @@ func TestProxyRouter_MissingGeo_Deny(t *testing.T) {
 		CookieSecret:     "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:           rig.fakeOPA.URL,
 		PolicyTZ:         ist,
+		MTLSDisabled:     true,
 		PostureDisabled:  true,
 		// No DevDefaultCountry — geo will be empty
 		DevDefaultPosture: &config.DevicePostureDefault{
@@ -508,6 +510,7 @@ func TestProxyRouter_MissingPosture_Deny(t *testing.T) {
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		DevDefaultCountry: "IN",
 		PostureDisabled:   true,
 		// No DevDefaultPosture — posture will be nil
@@ -666,6 +669,7 @@ func TestProxyRouter_PostureToken_Valid(t *testing.T) {
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		PostureDisabled:   true,
 		DevDefaultCountry: "IN",
 		PosturePublicKey:  pubPEM,
@@ -786,6 +790,7 @@ func TestProxyRouter_PostureToken_Expired(t *testing.T) {
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		DevDefaultCountry: "IN",
 		PosturePublicKey:  pubPEM,
 	}
@@ -885,6 +890,7 @@ func TestProxyRouter_PostureToken_Tampered(t *testing.T) {
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		DevDefaultCountry: "IN",
 		PosturePublicKey:  pubPEM,
 	}
@@ -996,6 +1002,7 @@ func TestProxyRouter_PostureToken_Missing(t *testing.T) {
 		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
+		MTLSDisabled:      true,
 		DevDefaultCountry: "IN",
 		PosturePublicKey:  pubPEM,
 	}

@@ -23,6 +23,7 @@ func TestTransportPresentsClientCertificateAndReloads(t *testing.T) {
 	caCert, caKey := makeCA(t, dir)
 	serverCert, serverKey := makeLeaf(t, dir, caCert, caKey, "localhost", x509.ExtKeyUsageServerAuth)
 	clientCert, clientKey := makeLeaf(t, dir, caCert, caKey, "proxy-client", x509.ExtKeyUsageClientAuth)
+	reloadedCert, reloadedKey := makeLeaf(t, dir, caCert, caKey, "proxy-client-reloaded", x509.ExtKeyUsageClientAuth)
 	writePEM(t, filepath.Join(dir, "ca.crt"), "CERTIFICATE", caCert.Raw)
 	writePEM(t, filepath.Join(dir, "server.crt"), "CERTIFICATE", serverCert.Raw)
 	writePEM(t, filepath.Join(dir, "server.key"), "EC PRIVATE KEY", clientKeyBytes(t, serverKey))
@@ -31,13 +32,16 @@ func TestTransportPresentsClientCertificateAndReloads(t *testing.T) {
 
 	pool := x509.NewCertPool()
 	pool.AddCert(caCert)
+	clientNames := make(chan string, 2)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.TLS.PeerCertificates) != 1 {
 			t.Errorf("expected one client certificate")
 		}
+		clientNames <- r.TLS.PeerCertificates[0].Subject.CommonName
 		w.WriteHeader(http.StatusOK)
 	}))
-	server.TLS = &tlsConfigForTest(pool, serverCert, serverKey)
+	serverConfig := tlsConfigForTest(pool, serverCert, serverKey)
+	server.TLS = &serverConfig
 	server.StartTLS()
 	defer server.Close()
 
@@ -54,6 +58,22 @@ func TestTransportPresentsClientCertificateAndReloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+
+	time.Sleep(10 * time.Millisecond)
+	writePEM(t, filepath.Join(dir, "client.crt"), "CERTIFICATE", reloadedCert.Raw)
+	writePEM(t, filepath.Join(dir, "client.key"), "EC PRIVATE KEY", clientKeyBytes(t, reloadedKey))
+	transport.CloseIdleConnections()
+	resp, err = client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := <-clientNames; got != "proxy-client" {
+		t.Fatalf("expected initial client certificate, got %q", got)
+	}
+	if got := <-clientNames; got != "proxy-client-reloaded" {
+		t.Fatalf("expected reloaded client certificate, got %q", got)
+	}
 }
 
 func tlsConfigForTest(pool *x509.CertPool, cert *x509.Certificate, key *ecdsa.PrivateKey) tls.Config {
@@ -87,5 +107,17 @@ func makeCertSigned(t *testing.T, dir, name string, ca *x509.Certificate, caKey 
 	return cert, key
 }
 
-func writePEM(t *testing.T, path, typ string, data []byte) { t.Helper(); if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: data}), 0600); err != nil { t.Fatal(err) } }
-func clientKeyBytes(t *testing.T, key *ecdsa.PrivateKey) []byte { t.Helper(); b, err := x509.MarshalECPrivateKey(key); if err != nil { t.Fatal(err) }; return b }
+func writePEM(t *testing.T, path, typ string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: data}), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+func clientKeyBytes(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	b, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

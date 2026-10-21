@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -38,9 +37,9 @@ func TestBackendRejectsDirectCallWithoutClientCertificate(t *testing.T) {
 	server := httptest.NewUnstartedServer(newHandler("test"))
 	server.TLS = &tls.Config{
 		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs: pool,
-		MinVersion: tls.VersionTLS12,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
 	}
 	server.StartTLS()
 	defer server.Close()
@@ -49,5 +48,4 @@ func TestBackendRejectsDirectCallWithoutClientCertificate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected direct call without client certificate to be rejected")
 	}
-	_ = http.StatusForbidden
 }

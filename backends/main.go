@@ -17,7 +17,21 @@ import (
 func main() {
 	// --- healthcheck subcommand (used by Docker HEALTHCHECK) ----------
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // healthcheck only
+		caData, err := os.ReadFile(os.Getenv("MTLS_CA_FILE"))
+		if err != nil {
+			os.Exit(1)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(caData) {
+			os.Exit(1)
+		}
+		clientCert, err := tls.LoadX509KeyPair(os.Getenv("MTLS_CLIENT_CERT_FILE"), os.Getenv("MTLS_CLIENT_KEY_FILE"))
+		if err != nil {
+			os.Exit(1)
+		}
+		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			RootCAs: roots, Certificates: []tls.Certificate{clientCert}, MinVersion: tls.VersionTLS12,
+		}}}
 		resp, err := client.Get("https://localhost:8080/healthz")
 		if err != nil {
 			os.Exit(1)

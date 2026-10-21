@@ -80,9 +80,13 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *p
 		r.policyCfg.PostureVerifier = v
 	}
 
+	if !cfg.MTLSDisabled && (cfg.MTLSCAFile == "" || cfg.MTLSClientCertFile == "" || cfg.MTLSClientKeyFile == "") {
+		return nil, fmt.Errorf("mTLS files are required unless MTLS_DISABLED=true")
+	}
+
 	r.proxyA = r.createReverseProxy(urlA, "backend-a")
 	r.proxyB = r.createReverseProxy(urlB, "backend-b")
-	if cfg.MTLSCAFile != "" || cfg.MTLSClientCertFile != "" || cfg.MTLSClientKeyFile != "" {
+	if !cfg.MTLSDisabled {
 		transport, err := mtls.NewTransport(mtls.Config{
 			CAFile: cfg.MTLSCAFile, ClientCertFile: cfg.MTLSClientCertFile, ClientKeyFile: cfg.MTLSClientKeyFile,
 		})

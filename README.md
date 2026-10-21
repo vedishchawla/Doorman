@@ -92,3 +92,17 @@ The proxy verifies the signature and expiry before including the verified
 claims in the OPA policy input. Posture verification is required by default;
 only set `POSTURE_DISABLED=true` for an explicit local-development fallback to
 `DEV_DEFAULT_POSTURE`.
+
+### Internal mTLS
+
+Generate the short-lived internal CA, proxy client certificate, and backend
+server certificates with:
+
+```sh
+scripts/gen-certs.sh
+```
+
+The proxy uses `MTLS_CA_FILE`, `MTLS_CLIENT_CERT_FILE`, and
+`MTLS_CLIENT_KEY_FILE` to authenticate to TLS-enabled backends. The transport
+reloads those files when they change. Both backends require a client
+certificate signed by the generated CA.
