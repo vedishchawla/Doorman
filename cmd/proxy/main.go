@@ -12,6 +12,7 @@ import (
 
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
+	"github.com/vedishchawla/doorman/internal/policy"
 )
 
 func main() {
@@ -25,6 +26,17 @@ func main() {
 	if err != nil {
 		slog.Error("failed to load configuration", "error", err)
 		os.Exit(1)
+	}
+
+	// Warn about dev-only defaults
+	if cfg.DevDefaultCountry != "" {
+		slog.Warn("DEV_DEFAULT_COUNTRY is set — using dev default geo for all requests", "country", cfg.DevDefaultCountry)
+	}
+	if cfg.DevDefaultPosture != nil {
+		slog.Warn("DEV_DEFAULT_POSTURE is set — using dev default device posture for all requests",
+			"disk_encrypted", cfg.DevDefaultPosture.DiskEncrypted,
+			"os_patch_age_days", cfg.DevDefaultPosture.OSPatchAgeDays,
+		)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,7 +58,9 @@ func main() {
 	}
 	defer authenticator.Close()
 
-	router, err := NewProxyRouter(cfg, authenticator)
+	policyClient := policy.NewClient(cfg.OPAURL, cfg.PolicyCacheTTL, cfg.PolicyCacheMaxSize)
+
+	router, err := NewProxyRouter(cfg, authenticator, policyClient)
 	if err != nil {
 		slog.Error("failed to initialize proxy router", "error", err)
 		os.Exit(1)
@@ -68,8 +82,11 @@ func main() {
 		slog.Info("starting zero-trust ingress proxy",
 			"addr", cfg.ListenAddr,
 			"issuer", cfg.OIDCIssuerURL,
+			"opa", cfg.OPAURL,
 			"backend_a", cfg.BackendAURL,
 			"backend_b", cfg.BackendBURL,
+			"policy_cache_ttl", cfg.PolicyCacheTTL.String(),
+			"policy_tz", cfg.PolicyTZ.String(),
 		)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("proxy server stopped with error", "error", err)

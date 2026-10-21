@@ -1,16 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
+	"github.com/vedishchawla/doorman/internal/policy"
 )
 
 // ProxyRouter manages routing and reverse proxying to backend-a and backend-b.
@@ -20,11 +24,20 @@ type ProxyRouter struct {
 	proxyA        *httputil.ReverseProxy
 	proxyB        *httputil.ReverseProxy
 	authenticator *auth.Authenticator
+	policyClient  *policy.Client
+	policyCfg     policyConfig
 	counter       uint64
 }
 
+// policyConfig holds policy-related configuration for the proxy.
+type policyConfig struct {
+	TZ                *time.Location
+	DevDefaultCountry string
+	DevDefaultPosture *config.DevicePostureDefault
+}
+
 // NewProxyRouter initializes reverse proxies for both backends.
-func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator) (*ProxyRouter, error) {
+func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *policy.Client) (*ProxyRouter, error) {
 	urlA, err := url.Parse(cfg.BackendAURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid BACKEND_A_URL: %w", err)
@@ -39,6 +52,15 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator) (*Pro
 		backendA:      urlA,
 		backendB:      urlB,
 		authenticator: authenticator,
+		policyClient:  pc,
+		policyCfg: policyConfig{
+			TZ:                cfg.PolicyTZ,
+			DevDefaultCountry: cfg.DevDefaultCountry,
+		},
+	}
+
+	if cfg.DevDefaultPosture != nil {
+		r.policyCfg.DevDefaultPosture = cfg.DevDefaultPosture
 	}
 
 	r.proxyA = r.createReverseProxy(urlA, "backend-a")
@@ -141,8 +163,101 @@ func (pr *ProxyRouter) Handler() http.Handler {
 		}
 	})
 
+	// Wrap proxy handler with policy check, then auth middleware
+	policyWrapped := pr.policyMiddleware(proxyHandler)
+
 	// All protected routes go through the auth middleware
-	mux.Handle("/", pr.authenticator.Middleware(proxyHandler))
+	mux.Handle("/", pr.authenticator.Middleware(policyWrapped))
 
 	return mux
+}
+
+// policyMiddleware evaluates OPA policy after authentication.
+func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := auth.ClaimsFromContext(r.Context())
+		if !ok || claims == nil {
+			// Should not happen — auth middleware runs first
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","reason":"missing claims","policy_id":"internal-error"}`))
+			return
+		}
+
+		// Build policy input
+		cleanedPath := policy.CleanPath(r.URL.Path)
+
+		// IP from RemoteAddr, never from client headers
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
+		// Geo: no client header source; use dev default if set
+		geo := ""
+		if pr.policyCfg.DevDefaultCountry != "" {
+			geo = pr.policyCfg.DevDefaultCountry
+		}
+
+		// Device posture: use dev default if set
+		var posture *policy.DevicePosture
+		if pr.policyCfg.DevDefaultPosture != nil {
+			posture = &policy.DevicePosture{
+				DiskEncrypted:  pr.policyCfg.DevDefaultPosture.DiskEncrypted,
+				OSPatchAgeDays: pr.policyCfg.DevDefaultPosture.OSPatchAgeDays,
+			}
+		}
+
+		// Fail closed: missing geo or posture means deny without calling OPA
+		if geo == "" {
+			slog.Warn("policy denied: missing geo information", "user", claims.PreferredUsername, "path", cleanedPath)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","reason":"missing geo information","policy_id":"missing-geo"}`))
+			return
+		}
+		if posture == nil {
+			slog.Warn("policy denied: missing device posture", "user", claims.PreferredUsername, "path", cleanedPath)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","reason":"missing device posture","policy_id":"missing-posture"}`))
+			return
+		}
+
+		policyTime := policy.FormatPolicyTime(time.Now(), pr.policyCfg.TZ)
+
+		input := policy.Input{
+			User:          claims.PreferredUsername,
+			Roles:         claims.Roles,
+			Resource:      cleanedPath,
+			Method:        r.Method,
+			IP:            ip,
+			Geo:           geo,
+			Time:          policyTime,
+			DevicePosture: posture,
+		}
+
+		decision, _ := pr.policyClient.Evaluate(r.Context(), input)
+
+		if !decision.Allow {
+			slog.Warn("policy denied request",
+				"user", input.User,
+				"resource", input.Resource,
+				"method", input.Method,
+				"reason", decision.Reason,
+				"policy_id", decision.PolicyID,
+			)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			resp := map[string]string{
+				"error":     "forbidden",
+				"reason":    decision.Reason,
+				"policy_id": decision.PolicyID,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
