@@ -415,3 +415,23 @@ export async function fetchBenchmarks(): Promise<{ rows: BenchmarkRow[]; isSampl
     isSample: true,
   };
 }
+
+export function formatLocalTimestamp(ts?: string): string {
+  if (!ts) return '-';
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) {
+      return ts.replace('T', ' ').substring(0, 19);
+    }
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const min = pad(d.getMinutes());
+    const ss = pad(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  } catch {
+    return ts.replace('T', ' ').substring(0, 19);
+  }
+}

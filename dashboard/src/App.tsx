@@ -9,7 +9,7 @@ import { AboutPage } from './pages/AboutPage';
 
 export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<PageId>('overview');
-  const [isDark, setIsDark] = useState<boolean>(true);
+  const [isDark, setIsDark] = useState<boolean>(false);
 
   useEffect(() => {
     if (isDark) {

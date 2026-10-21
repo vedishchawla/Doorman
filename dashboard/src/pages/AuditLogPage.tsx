@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AuditEntry } from '../types';
-import { fetchAuditEntries } from '../api';
+import { fetchAuditEntries, formatLocalTimestamp } from '../api';
 import { StatusIndicator } from '../components/StatusIndicator';
 import { SampleTag } from '../components/SampleTag';
 
@@ -212,8 +212,8 @@ export const AuditLogPage: React.FC = () => {
                       : ''
                   }`}
                 >
-                  <td className="py-2 px-3 text-neutral-500 text-[11px] whitespace-nowrap">
-                    {e.timestamp ? e.timestamp.replace('T', ' ').substring(0, 19) : '-'}
+                  <td className="py-2 px-3 text-neutral-500 text-[11px] whitespace-nowrap" title={e.timestamp ? `UTC: ${e.timestamp}` : ''}>
+                    {formatLocalTimestamp(e.timestamp)}
                   </td>
                   <td className="py-2 px-2 text-neutral-600 dark:text-neutral-400">
                     <span className="px-1 border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-[10px]">

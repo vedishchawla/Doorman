@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AuditEntry } from '../types';
-import { fetchAuditEntries } from '../api';
+import { fetchAuditEntries, formatLocalTimestamp } from '../api';
 import { StatusIndicator } from '../components/StatusIndicator';
 import { SampleTag } from '../components/SampleTag';
 
@@ -200,8 +200,8 @@ export const OverviewPage: React.FC = () => {
                   const totalMs = ((e.auth_ms || 0) + (e.opa_ms || 0) + (e.upstream_ms || 0)).toFixed(2);
                   return (
                     <tr key={idx} className="hover:bg-neutral-50 dark:hover:bg-neutral-800/40">
-                      <td className="py-2 px-3 text-neutral-500 text-[11px]">
-                        {e.timestamp ? e.timestamp.replace('T', ' ').substring(0, 19) : '-'}
+                      <td className="py-2 px-3 text-neutral-500 text-[11px] whitespace-nowrap" title={e.timestamp ? `UTC: ${e.timestamp}` : ''}>
+                        {formatLocalTimestamp(e.timestamp)}
                       </td>
                       <td className="py-2 px-3 text-neutral-900 dark:text-neutral-100">
                         {e.user || <span className="text-neutral-400">anonymous</span>}
