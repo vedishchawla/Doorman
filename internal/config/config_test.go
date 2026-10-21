@@ -197,7 +197,21 @@ func TestLoadFromEnv_DevDefaultCountry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if cfg.DevDefaultCountry != "US" {
 		t.Errorf("expected DevDefaultCountry 'US', got %q", cfg.DevDefaultCountry)
+	}
+}
+
+func TestLoadFromEnv_PostureDisabled(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("POSTURE_DISABLED", "true")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.PostureDisabled {
+		t.Fatal("expected posture verification to be disabled")
 	}
 }

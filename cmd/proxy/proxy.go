@@ -36,6 +36,7 @@ type policyConfig struct {
 	DevDefaultCountry string
 	DevDefaultPosture *config.DevicePostureDefault
 	PostureVerifier   *posture.Verifier // nil = posture verification disabled
+	PostureDisabled   bool
 }
 
 // NewProxyRouter initializes reverse proxies for both backends.
@@ -58,6 +59,7 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *p
 		policyCfg: policyConfig{
 			TZ:                cfg.PolicyTZ,
 			DevDefaultCountry: cfg.DevDefaultCountry,
+			PostureDisabled:   cfg.PostureDisabled,
 		},
 	}
 
@@ -65,7 +67,10 @@ func NewProxyRouter(cfg *config.Config, authenticator *auth.Authenticator, pc *p
 		r.policyCfg.DevDefaultPosture = cfg.DevDefaultPosture
 	}
 
-	// Wire posture verifier if public key is configured
+	if cfg.PosturePublicKey == "" && !cfg.PostureDisabled {
+		return nil, fmt.Errorf("POSTURE_PUBLIC_KEY is required unless POSTURE_DISABLED=true")
+	}
+
 	if cfg.PosturePublicKey != "" {
 		v, err := posture.NewVerifier(cfg.PosturePublicKey)
 		if err != nil {
@@ -210,8 +215,15 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 		if pr.policyCfg.DevDefaultCountry != "" {
 			geo = pr.policyCfg.DevDefaultCountry
 		}
+		if geo == "" {
+			slog.Warn("policy denied: missing geo", "user", claims.PreferredUsername, "path", cleanedPath)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden","reason":"missing geo","policy_id":"missing-geo"}`))
+			return
+		}
 
-		// Device posture: prefer verified JWT from header; fall back to dev default
+		// Device posture: verify the header unless posture checks are explicitly disabled.
 		var policyPosture *policy.DevicePosture
 
 		if pr.policyCfg.PostureVerifier != nil {
@@ -235,11 +247,12 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			policyPosture = &policy.DevicePosture{
+				DeviceID:       pc.DeviceID,
 				DiskEncrypted:  pc.DiskEncrypted,
 				FirewallOn:     pc.FirewallOn,
 				OSPatchAgeDays: pc.OSPatchAgeDays,
 			}
-		} else if pr.policyCfg.DevDefaultPosture != nil {
+		} else if pr.policyCfg.PostureDisabled && pr.policyCfg.DevDefaultPosture != nil {
 			// No verifier: use dev default if set
 			policyPosture = &policy.DevicePosture{
 				DiskEncrypted:  pr.policyCfg.DevDefaultPosture.DiskEncrypted,
@@ -267,7 +280,7 @@ func (pr *ProxyRouter) policyMiddleware(next http.Handler) http.Handler {
 			IP:            ip,
 			Geo:           geo,
 			Time:          policyTime,
-			DevicePosture: posture,
+			DevicePosture: policyPosture,
 		}
 
 		decision, _ := pr.policyClient.Evaluate(r.Context(), input)

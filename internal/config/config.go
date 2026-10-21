@@ -29,17 +29,18 @@ type Config struct {
 	BackendBURL      string
 
 	// Policy / OPA
-	OPAURL            string
-	PolicyCacheTTL    time.Duration
+	OPAURL             string
+	PolicyCacheTTL     time.Duration
 	PolicyCacheMaxSize int
-	PolicyTZ          *time.Location
+	PolicyTZ           *time.Location
 
 	// Dev-only defaults (logged as warnings if set)
 	DevDefaultCountry string
 	DevDefaultPosture *DevicePostureDefault
 
 	// Posture token verification
-	PosturePublicKey string // PEM-encoded ES256 public key; empty = posture verification disabled
+	PosturePublicKey string
+	PostureDisabled  bool
 }
 
 // LoadFromEnv loads configuration from environment variables.
@@ -110,8 +111,9 @@ func LoadFromEnv() (*Config, error) {
 		cfg.DevDefaultPosture = &dp
 	}
 
-	// Posture public key (optional)
+	// Posture verification is enabled unless explicitly disabled.
 	cfg.PosturePublicKey = os.Getenv("POSTURE_PUBLIC_KEY")
+	cfg.PostureDisabled = getEnv("POSTURE_DISABLED", "false") == "true"
 
 	return cfg, nil
 }

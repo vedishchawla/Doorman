@@ -76,3 +76,19 @@ nginx/                # TLS-terminating reverse proxy config
   certs/              # Generated self-signed certs (git-ignored)
 policies/             # OPA Rego policies
 ```
+
+### Device Posture
+
+Generate a five-minute ES256 posture token with the posture agent:
+
+```sh
+go run ./cmd/posture-agent > posture.token 2> posture-key.txt
+```
+
+Set the public key printed by the agent as `POSTURE_PUBLIC_KEY` on the proxy,
+then send the token in the `X-Device-Posture` header. Use
+`go run ./cmd/posture-agent --unhealthy` to generate an unhealthy demo token.
+The proxy verifies the signature and expiry before including the verified
+claims in the OPA policy input. Posture verification is required by default;
+only set `POSTURE_DISABLED=true` for an explicit local-development fallback to
+`DEV_DEFAULT_POSTURE`.

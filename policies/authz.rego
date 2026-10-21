@@ -17,12 +17,12 @@ denials contains {"rule_id": "geo-blocked", "message": concat("", ["Denied: coun
 }
 
 # Device posture: disk must be encrypted
-denials contains {"rule_id": "disk-not-encrypted", "message": "Denied: disk is not encrypted"} if {
+denials contains {"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"} if {
 	input.device_posture.disk_encrypted == false
 }
 
 # Device posture: firewall must be enabled
-denials contains {"rule_id": "firewall-off", "message": "Denied: firewall is not enabled"} if {
+denials contains {"rule_id": "firewall-off", "message": "Denied: device is not compliant: firewall is not enabled"} if {
 	input.device_posture.firewall_on == false
 }
 

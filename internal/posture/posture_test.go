@@ -2,6 +2,8 @@ package posture
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -134,6 +136,49 @@ func TestVerify_WrongAlgorithm(t *testing.T) {
 	_, err := v.Verify(fakeToken)
 	if !errors.Is(err, ErrUnsupportedAlg) {
 		t.Errorf("expected ErrUnsupportedAlg, got %v", err)
+	}
+
+}
+
+func TestVerify_HS256AlgorithmRejected(t *testing.T) {
+	priv := generateTestKey(t)
+	v := NewVerifierFromKey(&priv.PublicKey)
+
+	headerJSON, _ := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	payloadJSON, _ := json.Marshal(makeValidClaims())
+	token := base64.RawURLEncoding.EncodeToString(headerJSON) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadJSON) + ".invalid"
+
+	_, err := v.Verify(token)
+	if !errors.Is(err, ErrUnsupportedAlg) {
+		t.Errorf("expected ErrUnsupportedAlg, got %v", err)
+	}
+}
+
+func TestVerify_MissingClaimRejected(t *testing.T) {
+	priv := generateTestKey(t)
+	v := NewVerifierFromKey(&priv.PublicKey)
+	claims := makeValidClaims()
+	payload := map[string]interface{}{
+		"device_id": claims.DeviceID, "disk_encrypted": claims.DiskEncrypted,
+		"firewall_on": claims.FirewallOn, "iat": claims.IssuedAt, "exp": claims.ExpiresAt,
+	}
+	payloadJSON, _ := json.Marshal(payload)
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES256","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	hash := sha256.Sum256([]byte(header + "." + body))
+	r, s, err := ecdsa.Sign(rand.Reader, priv, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := make([]byte, 64)
+	copy(sig[32-len(r.Bytes()):32], r.Bytes())
+	copy(sig[64-len(s.Bytes()):], s.Bytes())
+	token := header + "." + body + "." + base64.RawURLEncoding.EncodeToString(sig)
+
+	_, err = v.Verify(token)
+	if !errors.Is(err, ErrMissingClaim) {
+		t.Errorf("expected ErrMissingClaim, got %v", err)
 	}
 }
 

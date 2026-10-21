@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,18 +19,19 @@ import (
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
 	"github.com/vedishchawla/doorman/internal/policy"
+	"github.com/vedishchawla/doorman/internal/posture"
 )
 
 type testRig struct {
-	fakeOIDC  *httptest.Server
-	fakeOPA   *httptest.Server
-	privKey   *rsa.PrivateKey
-	kid       string
-	backendA  *httptest.Server
-	backendB  *httptest.Server
-	lastReqA  *http.Request
-	lastReqB  *http.Request
-	mu        sync.Mutex
+	fakeOIDC *httptest.Server
+	fakeOPA  *httptest.Server
+	privKey  *rsa.PrivateKey
+	kid      string
+	backendA *httptest.Server
+	backendB *httptest.Server
+	lastReqA *http.Request
+	lastReqB *http.Request
+	mu       sync.Mutex
 }
 
 func setupTestRig(t *testing.T) *testRig {
@@ -169,18 +171,20 @@ func (tr *testRig) newRouterWithPolicy(t *testing.T, opaHandler http.Handler) (*
 
 	ist, _ := time.LoadLocation("Asia/Kolkata")
 	cfg := &config.Config{
-		BackendAURL:      tr.backendA.URL,
-		BackendBURL:      tr.backendB.URL,
-		OIDCIssuerURL:    tr.fakeOIDC.URL,
-		OIDCClientID:     "zt-proxy",
-		OIDCClientSecret: "secret",
-		OIDCRedirectURL:  "https://localhost/auth/callback",
-		CookieSecret:     "secret-key-that-is-at-least-32-bytes-long!",
-		OPAURL:           tr.fakeOPA.URL,
-		PolicyTZ:         ist,
+		BackendAURL:       tr.backendA.URL,
+		BackendBURL:       tr.backendB.URL,
+		OIDCIssuerURL:     tr.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            tr.fakeOPA.URL,
+		PolicyTZ:          ist,
+		PostureDisabled:   true,
 		DevDefaultCountry: "IN",
 		DevDefaultPosture: &config.DevicePostureDefault{
 			DiskEncrypted:  true,
+			FirewallOn:     true,
 			OSPatchAgeDays: 5,
 		},
 	}
@@ -358,10 +362,10 @@ func TestProxyRouter_PolicyDeny(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"result": map[string]interface{}{
 				"allow":     false,
-				"reason":    "Denied: disk is not encrypted",
+				"reason":    "Denied: device is not compliant: disk is not encrypted",
 				"policy_id": "disk-not-encrypted",
 				"denials": []interface{}{
-					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: disk is not encrypted"},
+					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"},
 				},
 			},
 		})
@@ -425,6 +429,7 @@ func TestProxyRouter_MissingGeo_Deny(t *testing.T) {
 		CookieSecret:     "secret-key-that-is-at-least-32-bytes-long!",
 		OPAURL:           rig.fakeOPA.URL,
 		PolicyTZ:         ist,
+		PostureDisabled:  true,
 		// No DevDefaultCountry — geo will be empty
 		DevDefaultPosture: &config.DevicePostureDefault{
 			DiskEncrypted:  true,
@@ -504,6 +509,7 @@ func TestProxyRouter_MissingPosture_Deny(t *testing.T) {
 		OPAURL:            rig.fakeOPA.URL,
 		PolicyTZ:          ist,
 		DevDefaultCountry: "IN",
+		PostureDisabled:   true,
 		// No DevDefaultPosture — posture will be nil
 	}
 
@@ -618,5 +624,435 @@ func TestProxyRouter_PolicyPathCleaning(t *testing.T) {
 	resource, _ := receivedInput["resource"].(string)
 	if resource != "/admin/x" {
 		t.Errorf("expected policy resource '/admin/x', got %q", resource)
+	}
+}
+
+func TestProxyRouter_PostureToken_Valid(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	privKey, err := posture.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("failed to generate posture key: %v", err)
+	}
+	pubPEM, err := posture.EncodePublicKeyPEM(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to encode public key: %v", err)
+	}
+
+	var capturedInput map[string]interface{}
+	fakeOPAHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if inp, ok := body["input"].(map[string]interface{}); ok {
+			capturedInput = inp
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"allow": true, "reason": "", "policy_id": "", "denials": []interface{}{},
+			},
+		})
+	})
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:       rig.backendA.URL,
+		BackendBURL:       rig.backendB.URL,
+		OIDCIssuerURL:     rig.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            rig.fakeOPA.URL,
+		PolicyTZ:          ist,
+		PostureDisabled:   true,
+		DevDefaultCountry: "IN",
+		PosturePublicKey:  pubPEM,
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	rig.fakeOPA.Close()
+	rig.fakeOPA = httptest.NewServer(fakeOPAHandler)
+	cfg.OPAURL = rig.fakeOPA.URL
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	postureClaims := posture.PostureClaims{
+		DeviceID:       "dev-123",
+		DiskEncrypted:  true,
+		FirewallOn:     true,
+		OSPatchAgeDays: 3,
+		IssuedAt:       time.Now().Unix(),
+		ExpiresAt:      time.Now().Add(5 * time.Minute).Unix(),
+	}
+	postureToken, err := posture.SignToken(postureClaims, privKey)
+	if err != nil {
+		t.Fatalf("failed to sign posture token: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+	req.Header.Set("X-Device-Posture", postureToken)
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Verify posture claims forwarded to OPA input
+	if capturedInput == nil {
+		t.Fatal("OPA did not receive input")
+	}
+	dp, ok := capturedInput["device_posture"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected device_posture in OPA input, got %v", capturedInput["device_posture"])
+	}
+	if dp["device_id"] != "dev-123" || dp["disk_encrypted"] != true || dp["firewall_on"] != true || dp["os_patch_age_days"] != float64(3) {
+		t.Errorf("unexpected posture claims in OPA input: %v", dp)
+	}
+
+	// Verify X-Device-Posture was stripped before reaching backend
+	rig.mu.Lock()
+	lastReq := rig.lastReqA
+	rig.mu.Unlock()
+	if lastReq == nil {
+		t.Fatal("backendA did not receive request")
+	}
+	if lastReq.Header.Get("X-Device-Posture") != "" {
+		t.Errorf("expected X-Device-Posture to be stripped, got %q", lastReq.Header.Get("X-Device-Posture"))
+	}
+}
+
+func TestProxyRouter_PostureToken_Expired(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	privKey, err := posture.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("failed to generate posture key: %v", err)
+	}
+	pubPEM, err := posture.EncodePublicKeyPEM(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to encode public key: %v", err)
+	}
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:       rig.backendA.URL,
+		BackendBURL:       rig.backendB.URL,
+		OIDCIssuerURL:     rig.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            rig.fakeOPA.URL,
+		PolicyTZ:          ist,
+		DevDefaultCountry: "IN",
+		PosturePublicKey:  pubPEM,
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	// Expired posture token
+	postureClaims := posture.PostureClaims{
+		DeviceID:       "dev-123",
+		DiskEncrypted:  true,
+		FirewallOn:     true,
+		OSPatchAgeDays: 3,
+		IssuedAt:       time.Now().Add(-10 * time.Minute).Unix(),
+		ExpiresAt:      time.Now().Add(-1 * time.Second).Unix(),
+	}
+	postureToken, err := posture.SignToken(postureClaims, privKey)
+	if err != nil {
+		t.Fatalf("failed to sign posture token: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+	req.Header.Set("X-Device-Posture", postureToken)
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["policy_id"] != "invalid-posture-token" {
+		t.Errorf("expected policy_id 'invalid-posture-token', got %q", res["policy_id"])
+	}
+}
+
+func TestProxyRouter_PostureToken_Tampered(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	privKey, err := posture.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("failed to generate posture key: %v", err)
+	}
+	pubPEM, err := posture.EncodePublicKeyPEM(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to encode public key: %v", err)
+	}
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:       rig.backendA.URL,
+		BackendBURL:       rig.backendB.URL,
+		OIDCIssuerURL:     rig.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            rig.fakeOPA.URL,
+		PolicyTZ:          ist,
+		DevDefaultCountry: "IN",
+		PosturePublicKey:  pubPEM,
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	postureClaims := posture.PostureClaims{
+		DeviceID:       "dev-123",
+		DiskEncrypted:  false,
+		FirewallOn:     false,
+		OSPatchAgeDays: 999,
+		IssuedAt:       time.Now().Unix(),
+		ExpiresAt:      time.Now().Add(5 * time.Minute).Unix(),
+	}
+	postureToken, err := posture.SignToken(postureClaims, privKey)
+	if err != nil {
+		t.Fatalf("failed to sign posture token: %v", err)
+	}
+
+	// Tamper with the token payload
+	parts := strings.Split(postureToken, ".")
+	fakeClaims := posture.PostureClaims{
+		DeviceID:       "dev-123",
+		DiskEncrypted:  true,
+		FirewallOn:     true,
+		OSPatchAgeDays: 1,
+		IssuedAt:       time.Now().Unix(),
+		ExpiresAt:      time.Now().Add(5 * time.Minute).Unix(),
+	}
+	fakePayload, _ := json.Marshal(fakeClaims)
+	tamperedToken := parts[0] + "." + base64.RawURLEncoding.EncodeToString(fakePayload) + "." + parts[2]
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+	req.Header.Set("X-Device-Posture", tamperedToken)
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["policy_id"] != "invalid-posture-token" {
+		t.Errorf("expected policy_id 'invalid-posture-token', got %q", res["policy_id"])
+	}
+}
+
+func TestProxyRouter_PostureToken_Missing(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	privKey, err := posture.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("failed to generate posture key: %v", err)
+	}
+	pubPEM, err := posture.EncodePublicKeyPEM(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to encode public key: %v", err)
+	}
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:       rig.backendA.URL,
+		BackendBURL:       rig.backendB.URL,
+		OIDCIssuerURL:     rig.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            rig.fakeOPA.URL,
+		PolicyTZ:          ist,
+		DevDefaultCountry: "IN",
+		PosturePublicKey:  pubPEM,
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	// No X-Device-Posture header attached
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["policy_id"] != "invalid-posture-token" {
+		t.Errorf("expected policy_id 'invalid-posture-token', got %q", res["policy_id"])
 	}
 }

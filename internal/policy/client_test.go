@@ -33,13 +33,13 @@ func TestEvaluate_Allow(t *testing.T) {
 	c.SetHTTPClient(srv.Client())
 
 	d, err := c.Evaluate(context.Background(), Input{
-		User:     "alice",
-		Roles:    []string{"admin"},
-		Resource: "/test",
-		Method:   "GET",
-		IP:       "127.0.0.1",
-		Geo:      "IN",
-		Time:     "10:00",
+		User:          "alice",
+		Roles:         []string{"admin"},
+		Resource:      "/test",
+		Method:        "GET",
+		IP:            "127.0.0.1",
+		Geo:           "IN",
+		Time:          "10:00",
 		DevicePosture: &DevicePosture{DiskEncrypted: true, OSPatchAgeDays: 5},
 	})
 	if err != nil {
@@ -56,10 +56,10 @@ func TestEvaluate_Deny(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"result": map[string]interface{}{
 				"allow":     false,
-				"reason":    "Denied: disk is not encrypted",
+				"reason":    "Denied: device is not compliant: disk is not encrypted",
 				"policy_id": "disk-not-encrypted",
 				"denials": []interface{}{
-					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: disk is not encrypted"},
+					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"},
 				},
 			},
 		})
@@ -259,7 +259,7 @@ func TestCache_MaxSizeEviction(t *testing.T) {
 		input := Input{
 			User: "alice", Roles: []string{"admin"}, Resource: "/",
 			Method: "GET", IP: "1.2.3.4", Geo: "IN",
-			Time:          string(rune('0' + i)) + "0:00",
+			Time:          string(rune('0'+i)) + "0:00",
 			DevicePosture: &DevicePosture{DiskEncrypted: true, OSPatchAgeDays: 5},
 		}
 		_, _ = c.Evaluate(context.Background(), input)
@@ -332,7 +332,7 @@ func TestDenialsSortedDeterministically(t *testing.T) {
 				"policy_id": "",
 				"denials": []interface{}{
 					map[string]interface{}{"rule_id": "viewer-time-restricted", "message": "Denied: outside business hours"},
-					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: disk is not encrypted"},
+					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"},
 				},
 			},
 		})
@@ -352,7 +352,40 @@ func TestDenialsSortedDeterministically(t *testing.T) {
 	if d.PolicyID != "disk-not-encrypted" {
 		t.Errorf("expected first denial by sorted rule_id 'disk-not-encrypted', got %q", d.PolicyID)
 	}
-	if d.Reason != "Denied: disk is not encrypted" {
+
+	if d.Reason != "Denied: device is not compliant: disk is not encrypted" {
 		t.Errorf("unexpected reason: %q", d.Reason)
+	}
+}
+
+func TestCache_DistinguishesDevicePosture(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"allow": true, "reason": "", "policy_id": "", "denials": []interface{}{},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, time.Minute, 100)
+	c.SetHTTPClient(srv.Client())
+	base := Input{
+		User: "alice", Roles: []string{"admin"}, Resource: "/", Method: "GET",
+		IP: "1.2.3.4", Geo: "IN", Time: "10:00",
+	}
+	healthy := base
+	healthy.DevicePosture = &DevicePosture{DeviceID: "device-1", DiskEncrypted: true, FirewallOn: true, OSPatchAgeDays: 5}
+	unhealthy := base
+	unhealthy.DevicePosture = &DevicePosture{DeviceID: "device-1", DiskEncrypted: false, FirewallOn: false, OSPatchAgeDays: 999}
+
+	_, _ = c.Evaluate(context.Background(), healthy)
+	_, _ = c.Evaluate(context.Background(), unhealthy)
+	_, _ = c.Evaluate(context.Background(), healthy)
+	if callCount != 2 {
+		t.Fatalf("expected healthy and unhealthy posture to use distinct cache entries, got %d OPA calls", callCount)
 	}
 }

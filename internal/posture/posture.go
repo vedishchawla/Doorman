@@ -34,6 +34,7 @@ var (
 	ErrUnsupportedAlg   = errors.New("unsupported posture token algorithm")
 	ErrInvalidSignature = errors.New("invalid posture token signature")
 	ErrTokenExpired     = errors.New("posture token expired")
+	ErrMissingClaim     = errors.New("missing posture claim")
 )
 
 // jwtHeader is the JWT header for posture tokens.
@@ -129,13 +130,23 @@ func (v *Verifier) Verify(tokenString string) (*PostureClaims, error) {
 		return nil, fmt.Errorf("%w: payload decode failed", ErrMalformedToken)
 	}
 
+	var rawClaims map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &rawClaims); err != nil {
+		return nil, fmt.Errorf("%w: payload unmarshal failed", ErrMalformedToken)
+	}
+	for _, name := range []string{"device_id", "disk_encrypted", "firewall_on", "os_patch_age_days", "exp", "iat"} {
+		if _, ok := rawClaims[name]; !ok {
+			return nil, fmt.Errorf("%w: %s", ErrMissingClaim, name)
+		}
+	}
+
 	var claims PostureClaims
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return nil, fmt.Errorf("%w: payload unmarshal failed", ErrMalformedToken)
+		return nil, fmt.Errorf("%w: claims unmarshal failed", ErrMalformedToken)
 	}
 
 	// Check expiry
-	if claims.ExpiresAt > 0 && time.Now().Unix() > claims.ExpiresAt {
+	if time.Now().Unix() >= claims.ExpiresAt {
 		return nil, ErrTokenExpired
 	}
 

@@ -17,9 +17,10 @@ import (
 
 // DevicePosture represents device security posture information.
 type DevicePosture struct {
-	DiskEncrypted  bool `json:"disk_encrypted"`
-	FirewallOn     bool `json:"firewall_on"`
-	OSPatchAgeDays int  `json:"os_patch_age_days"`
+	DeviceID       string `json:"device_id"`
+	DiskEncrypted  bool   `json:"disk_encrypted"`
+	FirewallOn     bool   `json:"firewall_on"`
+	OSPatchAgeDays int    `json:"os_patch_age_days"`
 }
 
 // Input is the policy evaluation input document sent to OPA.
@@ -60,16 +61,16 @@ type opaResponse struct {
 
 // opaResult maps the Rego output.
 type opaResult struct {
-	Allow   bool              `json:"allow"`
-	Reason  string            `json:"reason"`
-	PolicyID string           `json:"policy_id"`
-	Denials []Denial          `json:"denials"`
+	Allow    bool     `json:"allow"`
+	Reason   string   `json:"reason"`
+	PolicyID string   `json:"policy_id"`
+	Denials  []Denial `json:"denials"`
 }
 
 // cacheEntry stores a cached decision with its expiry time.
 type cacheEntry struct {
-	decision  Decision
-	expiresAt time.Time
+	decision   Decision
+	expiresAt  time.Time
 	insertedAt time.Time
 }
 
