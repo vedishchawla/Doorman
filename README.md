@@ -89,9 +89,10 @@ Set the public key printed by the agent as `POSTURE_PUBLIC_KEY` on the proxy,
 then send the token in the `X-Device-Posture` header. Use
 `go run ./cmd/posture-agent --unhealthy` to generate an unhealthy demo token.
 The proxy verifies the signature and expiry before including the verified
-claims in the OPA policy input. Posture verification is required by default;
-only set `POSTURE_DISABLED=true` for an explicit local-development fallback to
-`DEV_DEFAULT_POSTURE`.
+claims in the OPA policy input. Posture verification is required by default.
+For Compose, put the public key in the ignored `.env` file as
+`POSTURE_PUBLIC_KEY='...'`; the Compose configuration refuses to start if it
+is missing.
 
 ### Internal mTLS
 
@@ -105,4 +106,6 @@ scripts/gen-certs.sh
 The proxy uses `MTLS_CA_FILE`, `MTLS_CLIENT_CERT_FILE`, and
 `MTLS_CLIENT_KEY_FILE` to authenticate to TLS-enabled backends. The transport
 reloads those files when they change. Both backends require a client
-certificate signed by the generated CA.
+certificate signed by the generated CA. When the generated server certificates
+are rotated, restart both backend containers so they reload their certificates;
+the proxy does not need to restart.

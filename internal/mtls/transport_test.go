@@ -74,6 +74,13 @@ func TestTransportPresentsClientCertificateAndReloads(t *testing.T) {
 	if got := <-clientNames; got != "proxy-client-reloaded" {
 		t.Fatalf("expected reloaded client certificate, got %q", got)
 	}
+
+	otherCACert, _ := makeCA(t, dir)
+	writePEM(t, filepath.Join(dir, "ca.crt"), "CERTIFICATE", otherCACert.Raw)
+	transport.CloseIdleConnections()
+	if _, err := client.Get(server.URL); err == nil {
+		t.Fatal("expected certificate signed by a different CA to be rejected")
+	}
 }
 
 func tlsConfigForTest(pool *x509.CertPool, cert *x509.Certificate, key *ecdsa.PrivateKey) tls.Config {

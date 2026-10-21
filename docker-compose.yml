@@ -5,7 +5,7 @@ services:
     command: start-dev --import-realm
     environment:
       KC_HEALTH_ENABLED: "true"
-      KC_HOSTNAME: localhost
+      KC_HOSTNAME: keycloak
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
     volumes:
@@ -48,7 +48,7 @@ services:
     ports:
       - "443:443"
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-check-certificate --spider -q https://127.0.0.1:443/ || exit 1"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 443"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -121,7 +121,7 @@ services:
       BACKEND_B_URL: https://backend-b:8080
       DEV_DEFAULT_COUNTRY: IN
       DEV_DEFAULT_POSTURE: '{"disk_encrypted":true,"firewall_on":true,"os_patch_age_days":5}'
-      POSTURE_DISABLED: "true"
+      POSTURE_PUBLIC_KEY: ${POSTURE_PUBLIC_KEY:?set POSTURE_PUBLIC_KEY in .env}
       MTLS_CA_FILE: /certs/ca.crt
       MTLS_CLIENT_CERT_FILE: /certs/proxy-client.crt
       MTLS_CLIENT_KEY_FILE: /certs/proxy-client.key
