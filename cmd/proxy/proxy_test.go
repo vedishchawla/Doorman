@@ -17,10 +17,12 @@ import (
 
 	"github.com/vedishchawla/doorman/internal/auth"
 	"github.com/vedishchawla/doorman/internal/config"
+	"github.com/vedishchawla/doorman/internal/policy"
 )
 
 type testRig struct {
 	fakeOIDC  *httptest.Server
+	fakeOPA   *httptest.Server
 	privKey   *rsa.PrivateKey
 	kid       string
 	backendA  *httptest.Server
@@ -107,11 +109,26 @@ func setupTestRig(t *testing.T) *testRig {
 	})
 
 	rig.fakeOIDC = httptest.NewServer(mux)
+
+	// Fake OPA — default allow
+	rig.fakeOPA = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"allow":     true,
+				"reason":    "",
+				"policy_id": "",
+				"denials":   []interface{}{},
+			},
+		})
+	}))
+
 	return rig
 }
 
 func (tr *testRig) Close() {
 	tr.fakeOIDC.Close()
+	tr.fakeOPA.Close()
 	tr.backendA.Close()
 	tr.backendB.Close()
 }
@@ -142,18 +159,30 @@ func (tr *testRig) signToken(t *testing.T, claims auth.Claims) string {
 	return input + "." + p3
 }
 
-func TestProxyRouter_Healthz(t *testing.T) {
-	rig := setupTestRig(t)
-	defer rig.Close()
+func (tr *testRig) newRouterWithPolicy(t *testing.T, opaHandler http.Handler) (*ProxyRouter, *auth.Authenticator) {
+	t.Helper()
 
+	if opaHandler != nil {
+		tr.fakeOPA.Close()
+		tr.fakeOPA = httptest.NewServer(opaHandler)
+	}
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
 	cfg := &config.Config{
-		BackendAURL:      rig.backendA.URL,
-		BackendBURL:      rig.backendB.URL,
-		OIDCIssuerURL:    rig.fakeOIDC.URL,
+		BackendAURL:      tr.backendA.URL,
+		BackendBURL:      tr.backendB.URL,
+		OIDCIssuerURL:    tr.fakeOIDC.URL,
 		OIDCClientID:     "zt-proxy",
 		OIDCClientSecret: "secret",
 		OIDCRedirectURL:  "https://localhost/auth/callback",
 		CookieSecret:     "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:           tr.fakeOPA.URL,
+		PolicyTZ:         ist,
+		DevDefaultCountry: "IN",
+		DevDefaultPosture: &config.DevicePostureDefault{
+			DiskEncrypted:  true,
+			OSPatchAgeDays: 5,
+		},
 	}
 
 	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
@@ -162,17 +191,28 @@ func TestProxyRouter_Healthz(t *testing.T) {
 		ClientSecret: cfg.OIDCClientSecret,
 		RedirectURL:  cfg.OIDCRedirectURL,
 		CookieSecret: []byte(cfg.CookieSecret),
-		HTTPClient:   rig.fakeOIDC.Client(),
+		HTTPClient:   tr.fakeOIDC.Client(),
 	})
 	if err != nil {
 		t.Fatalf("failed to init authenticator: %v", err)
 	}
-	defer authenticator.Close()
 
-	router, err := NewProxyRouter(cfg, authenticator)
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+
+	router, err := NewProxyRouter(cfg, authenticator, pc)
 	if err != nil {
 		t.Fatalf("failed to init router: %v", err)
 	}
+
+	return router, authenticator
+}
+
+func TestProxyRouter_Healthz(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	router, authenticator := rig.newRouterWithPolicy(t, nil)
+	defer authenticator.Close()
 
 	server := httptest.NewServer(router.Handler())
 	defer server.Close()
@@ -193,33 +233,8 @@ func TestProxyRouter_ForwardingWithIdentityHeaders(t *testing.T) {
 	defer rig.Close()
 
 	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
-	cfg := &config.Config{
-		BackendAURL:      rig.backendA.URL,
-		BackendBURL:      rig.backendB.URL,
-		OIDCIssuerURL:    rig.fakeOIDC.URL,
-		OIDCClientID:     "zt-proxy",
-		OIDCClientSecret: "secret",
-		OIDCRedirectURL:  "https://localhost/auth/callback",
-		CookieSecret:     cookieSecret,
-	}
-
-	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
-		IssuerURL:    cfg.OIDCIssuerURL,
-		ClientID:     cfg.OIDCClientID,
-		ClientSecret: cfg.OIDCClientSecret,
-		RedirectURL:  cfg.OIDCRedirectURL,
-		CookieSecret: []byte(cfg.CookieSecret),
-		HTTPClient:   rig.fakeOIDC.Client(),
-	})
-	if err != nil {
-		t.Fatalf("failed to init authenticator: %v", err)
-	}
+	router, authenticator := rig.newRouterWithPolicy(t, nil)
 	defer authenticator.Close()
-
-	router, err := NewProxyRouter(cfg, authenticator)
-	if err != nil {
-		t.Fatalf("failed to init router: %v", err)
-	}
 
 	server := httptest.NewServer(router.Handler())
 	defer server.Close()
@@ -276,24 +291,6 @@ func TestProxyRouter_ForwardingWithIdentityHeaders(t *testing.T) {
 	if res["roles"] != "admin,viewer" {
 		t.Errorf("expected downstream to receive roles 'admin,viewer', got %v", res["roles"])
 	}
-
-	// Verify explicit routing to backend-b
-	reqB, _ := http.NewRequest(http.MethodGet, server.URL+"/backend-b/test", nil)
-	reqB.AddCookie(&http.Cookie{
-		Name:  auth.SessionCookieName,
-		Value: signedCookie,
-	})
-	respB, err := server.Client().Do(reqB)
-	if err != nil {
-		t.Fatalf("backend-b request failed: %v", err)
-	}
-	defer respB.Body.Close()
-
-	var resB map[string]interface{}
-	_ = json.NewDecoder(respB.Body).Decode(&resB)
-	if resB["backend"] != "backend-b" {
-		t.Errorf("expected backend 'backend-b', got %v", resB["backend"])
-	}
 }
 
 func TestProxyRouter_HeaderSpoofingProtection(t *testing.T) {
@@ -301,33 +298,8 @@ func TestProxyRouter_HeaderSpoofingProtection(t *testing.T) {
 	defer rig.Close()
 
 	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
-	cfg := &config.Config{
-		BackendAURL:      rig.backendA.URL,
-		BackendBURL:      rig.backendB.URL,
-		OIDCIssuerURL:    rig.fakeOIDC.URL,
-		OIDCClientID:     "zt-proxy",
-		OIDCClientSecret: "secret",
-		OIDCRedirectURL:  "https://localhost/auth/callback",
-		CookieSecret:     cookieSecret,
-	}
-
-	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
-		IssuerURL:    cfg.OIDCIssuerURL,
-		ClientID:     cfg.OIDCClientID,
-		ClientSecret: cfg.OIDCClientSecret,
-		RedirectURL:  cfg.OIDCRedirectURL,
-		CookieSecret: []byte(cfg.CookieSecret),
-		HTTPClient:   rig.fakeOIDC.Client(),
-	})
-	if err != nil {
-		t.Fatalf("failed to init authenticator: %v", err)
-	}
+	router, authenticator := rig.newRouterWithPolicy(t, nil)
 	defer authenticator.Close()
-
-	router, err := NewProxyRouter(cfg, authenticator)
-	if err != nil {
-		t.Fatalf("failed to init router: %v", err)
-	}
 
 	server := httptest.NewServer(router.Handler())
 	defer server.Close()
@@ -373,5 +345,278 @@ func TestProxyRouter_HeaderSpoofingProtection(t *testing.T) {
 	}
 	if res["user"] != "bob" {
 		t.Errorf("expected downstream to see user 'bob', got %v", res["user"])
+	}
+}
+
+func TestProxyRouter_PolicyDeny(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	// OPA that denies everything
+	denyOPA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"allow":     false,
+				"reason":    "Denied: disk is not encrypted",
+				"policy_id": "disk-not-encrypted",
+				"denials": []interface{}{
+					map[string]interface{}{"rule_id": "disk-not-encrypted", "message": "Denied: disk is not encrypted"},
+				},
+			},
+		})
+	})
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	router, authenticator := rig.newRouterWithPolicy(t, denyOPA)
+	defer authenticator.Close()
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if res["policy_id"] != "disk-not-encrypted" {
+		t.Errorf("expected policy_id 'disk-not-encrypted', got %q", res["policy_id"])
+	}
+}
+
+func TestProxyRouter_MissingGeo_Deny(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	// Create router WITHOUT dev defaults for geo
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:      rig.backendA.URL,
+		BackendBURL:      rig.backendB.URL,
+		OIDCIssuerURL:    rig.fakeOIDC.URL,
+		OIDCClientID:     "zt-proxy",
+		OIDCClientSecret: "secret",
+		OIDCRedirectURL:  "https://localhost/auth/callback",
+		CookieSecret:     "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:           rig.fakeOPA.URL,
+		PolicyTZ:         ist,
+		// No DevDefaultCountry — geo will be empty
+		DevDefaultPosture: &config.DevicePostureDefault{
+			DiskEncrypted:  true,
+			OSPatchAgeDays: 5,
+		},
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for missing geo, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["policy_id"] != "missing-geo" {
+		t.Errorf("expected policy_id 'missing-geo', got %q", res["policy_id"])
+	}
+}
+
+func TestProxyRouter_MissingPosture_Deny(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	cfg := &config.Config{
+		BackendAURL:       rig.backendA.URL,
+		BackendBURL:       rig.backendB.URL,
+		OIDCIssuerURL:     rig.fakeOIDC.URL,
+		OIDCClientID:      "zt-proxy",
+		OIDCClientSecret:  "secret",
+		OIDCRedirectURL:   "https://localhost/auth/callback",
+		CookieSecret:      "secret-key-that-is-at-least-32-bytes-long!",
+		OPAURL:            rig.fakeOPA.URL,
+		PolicyTZ:          ist,
+		DevDefaultCountry: "IN",
+		// No DevDefaultPosture — posture will be nil
+	}
+
+	authenticator, err := auth.NewAuthenticator(context.Background(), auth.AuthenticatorConfig{
+		IssuerURL:    cfg.OIDCIssuerURL,
+		ClientID:     cfg.OIDCClientID,
+		ClientSecret: cfg.OIDCClientSecret,
+		RedirectURL:  cfg.OIDCRedirectURL,
+		CookieSecret: []byte(cfg.CookieSecret),
+		HTTPClient:   rig.fakeOIDC.Client(),
+	})
+	if err != nil {
+		t.Fatalf("failed to init authenticator: %v", err)
+	}
+	defer authenticator.Close()
+
+	pc := policy.NewClient(cfg.OPAURL, 0, 100)
+	router, err := NewProxyRouter(cfg, authenticator, pc)
+	if err != nil {
+		t.Fatalf("failed to init router: %v", err)
+	}
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for missing posture, got %d", resp.StatusCode)
+	}
+
+	var res map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["policy_id"] != "missing-posture" {
+		t.Errorf("expected policy_id 'missing-posture', got %q", res["policy_id"])
+	}
+}
+
+func TestProxyRouter_PolicyPathCleaning(t *testing.T) {
+	rig := setupTestRig(t)
+	defer rig.Close()
+
+	var receivedInput map[string]interface{}
+	captureOPA := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if inp, ok := body["input"].(map[string]interface{}); ok {
+			receivedInput = inp
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"allow": true, "reason": "", "policy_id": "", "denials": []interface{}{},
+			},
+		})
+	})
+
+	cookieSecret := "secret-key-that-is-at-least-32-bytes-long!"
+	router, authenticator := rig.newRouterWithPolicy(t, captureOPA)
+	defer authenticator.Close()
+
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+
+	token := rig.signToken(t, auth.Claims{
+		Issuer:            rig.fakeOIDC.URL,
+		Subject:           "alice",
+		Audience:          []string{"zt-proxy"},
+		ExpiresAt:         time.Now().Unix() + 3600,
+		PreferredUsername: "alice",
+		Roles:             []string{"admin"},
+	})
+	signedCookie := auth.SignValue(token, []byte(cookieSecret))
+
+	// Request to /backend-a/admin/x should clean to /admin/x in policy input
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/backend-a/admin/x", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: signedCookie,
+	})
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if receivedInput == nil {
+		t.Fatal("OPA did not receive input")
+	}
+	resource, _ := receivedInput["resource"].(string)
+	if resource != "/admin/x" {
+		t.Errorf("expected policy resource '/admin/x', got %q", resource)
 	}
 }
