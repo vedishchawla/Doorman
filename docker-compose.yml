@@ -1,0 +1,112 @@
+services:
+  # ---------- Identity Provider ----------
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    command: start-dev --import-realm
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: keycloak
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "(echo > /dev/tcp/localhost/9000) 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - zt-net
+
+  # ---------- Policy Engine ----------
+  opa:
+    image: openpolicyagent/opa:0.70.0
+    command: run --server /policies
+    volumes:
+      - ./policies:/policies:ro
+    ports:
+      - "8181:8181"
+    # OPA distroless image has no shell – skip container healthcheck.
+    # Verify with: curl http://localhost:8181/health from the host.
+    depends_on:
+      keycloak:
+        condition: service_started
+    networks:
+      - zt-net
+
+  # ---------- TLS-Terminating Load Balancer ----------
+  nginx:
+    image: nginx:1.27.2-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "443:443"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate --spider -q https://127.0.0.1:443/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      backend-a:
+        condition: service_healthy
+    networks:
+      - zt-net
+
+  # ---------- Dummy Backends ----------
+  backend-a:
+    build:
+      context: ./backends
+      dockerfile: Dockerfile
+    environment:
+      BACKEND_NAME: backend-a
+    healthcheck:
+      test: ["CMD", "/backend", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - zt-net
+
+  backend-b:
+    build:
+      context: ./backends
+      dockerfile: Dockerfile
+    environment:
+      BACKEND_NAME: backend-b
+    healthcheck:
+      test: ["CMD", "/backend", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - zt-net
+
+  # ---------- Step 4: Uncomment when the proxy is ready ----------
+  # proxy:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     OIDC_ISSUER_URL: http://keycloak:8080/realms/zt
+  #     OIDC_CLIENT_ID: zt-proxy
+  #     OIDC_CLIENT_SECRET: zt-proxy-dev-secret
+  #     OPA_URL: http://opa:8181
+  #     BACKEND_URL: http://backend-a:8080
+  #   ports:
+  #     - "8081:8080"
+  #   depends_on:
+  #     keycloak:
+  #       condition: service_healthy
+  #     opa:
+  #       condition: service_started
+  #   networks:
+  #     - zt-net
+
+networks:
+  zt-net:
+    driver: bridge

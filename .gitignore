@@ -1,0 +1,22 @@
+# TLS certs (generated)
+nginx/certs/*.crt
+nginx/certs/*.key
+
+# Audit logs
+audit-logs/
+
+# Benchmark results
+bench-results/
+
+# Node modules
+node_modules/
+
+# Go binaries
+/proxy
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
