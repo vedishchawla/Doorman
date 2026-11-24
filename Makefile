@@ -1,4 +1,4 @@
-.PHONY: up down test unit-test bench certs mtls-certs
+.PHONY: up down test unit-test bench k8s-validate certs mtls-certs
 
 # Run unit tests across all packages (uses local go if installed, falls back to Docker Go container).
 unit-test:
@@ -14,7 +14,7 @@ mtls-certs:
 	@scripts/gen-certs.sh
 
 # Build images, generate certs, and start all services.
-up: certs
+up: certs mtls-certs
 	docker compose up -d --build
 
 # Stop and remove all containers, volumes, and networks.
@@ -37,6 +37,10 @@ test: unit-test
 	@curl -sk https://localhost/ 2>/dev/null | python3 -m json.tool || echo "nginx not ready yet"
 	@echo ""
 
-# Benchmark stub – k6 scripts will be added later.
+# Run k6 load benchmark against Doorman (enforces p95 < 12ms SLA).
 bench:
-	@echo "bench: k6 benchmarks not implemented yet"
+	@which k6 >/dev/null 2>&1 && k6 run bench/loadtest.js || docker run --rm --network host -v "$$(pwd)/bench:/bench" grafana/k6 run /bench/loadtest.js
+
+# Validate Kubernetes manifests client-side.
+k8s-validate:
+	kubectl apply --dry-run=client --validate=false -f k8s/

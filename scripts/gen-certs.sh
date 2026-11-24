@@ -6,7 +6,7 @@ mkdir -p "$CERT_DIR"
 umask 077
 
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-  -days 1 -keyout "$CERT_DIR/ca.key" -out "$CERT_DIR/ca.crt" \
+  -days 30 -keyout "$CERT_DIR/ca.key" -out "$CERT_DIR/ca.crt" \
   -subj "/CN=Doorman Internal CA"
 
 make_cert() {
@@ -15,7 +15,7 @@ make_cert() {
   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
     -keyout "$CERT_DIR/$name.key" -out "$CERT_DIR/$name.csr" -subj "/CN=$name"
   openssl x509 -req -in "$CERT_DIR/$name.csr" -CA "$CERT_DIR/ca.crt" \
-    -CAkey "$CERT_DIR/ca.key" -CAcreateserial -days 1 -sha256 \
+    -CAkey "$CERT_DIR/ca.key" -CAcreateserial -days 30 -sha256 \
     -out "$CERT_DIR/$name.crt" \
     -extfile <(printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=%s\nsubjectAltName=%s\n' "$3" "$san")
   rm -f "$CERT_DIR/$name.csr"

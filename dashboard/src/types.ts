@@ -81,6 +81,7 @@ export interface SimulationResult {
   steps: SimulationStep[];
   responseBody: string;
   curlCommand: string;
+  isLive?: boolean;
   mtlsInfo: {
     clientCert: string;
     serverCert: string;
@@ -88,6 +89,25 @@ export interface SimulationResult {
     cipherSuite: string;
   };
   total_ms: number;
+}
+
+export interface InfraContainer {
+  name: string;
+  service: string;
+  state: string;
+  health: string;
+  ports: string;
+}
+
+export interface K8sManifest {
+  name: string;
+  content: string;
+}
+
+export interface InfraStatus {
+  dockerRunning: boolean;
+  containers: InfraContainer[];
+  k8sManifests: K8sManifest[];
 }
 
 export type PageId = 'overview' | 'simulator' | 'audit' | 'policy-tester' | 'benchmarks' | 'about';

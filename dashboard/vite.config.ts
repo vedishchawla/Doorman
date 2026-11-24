@@ -465,6 +465,77 @@ export default defineConfig({
             }
           });
         });
+
+        // Serve /api/rego (live policies/authz.rego source)
+        server.middlewares.use('/api/rego', (_req, res) => {
+          const regoPath = path.resolve(__dirname, '../policies/authz.rego');
+          const source = fs.existsSync(regoPath) ? fs.readFileSync(regoPath, 'utf-8') : '';
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ source }));
+        });
+
+        // Serve /api/infra (Docker Compose live status + Kubernetes manifests)
+        server.middlewares.use('/api/infra', (_req, res) => {
+          const projectRoot = path.resolve(__dirname, '..');
+          let dockerRunning = false;
+          const containers: any[] = [];
+
+          try {
+            const out = cp.execSync('docker compose ps --format json', {
+              cwd: projectRoot,
+              timeout: 2500,
+              stdio: ['ignore', 'pipe', 'ignore'],
+            }).toString().trim();
+
+            if (out) {
+              if (out.startsWith('[')) {
+                const arr = JSON.parse(out);
+                for (const c of arr) {
+                  containers.push({
+                    name: c.Name || c.Service || 'unknown',
+                    service: c.Service || c.Name || 'unknown',
+                    state: c.State || 'unknown',
+                    health: c.Health || (c.State === 'running' ? 'running' : 'unknown'),
+                    ports: c.Ports || '',
+                  });
+                }
+              } else {
+                for (const line of out.split('\n')) {
+                  const trimmed = line.trim();
+                  if (!trimmed) continue;
+                  try {
+                    const c = JSON.parse(trimmed);
+                    containers.push({
+                      name: c.Name || c.Service || 'unknown',
+                      service: c.Service || c.Name || 'unknown',
+                      state: c.State || 'unknown',
+                      health: c.Health || (c.State === 'running' ? 'running' : 'unknown'),
+                      ports: c.Ports || '',
+                    });
+                  } catch {}
+                }
+              }
+              dockerRunning = containers.some(c => String(c.state).toLowerCase() === 'running');
+            }
+          } catch {}
+
+          const k8sDir = path.resolve(projectRoot, 'k8s');
+          const k8sManifests: { name: string; content: string }[] = [];
+          if (fs.existsSync(k8sDir)) {
+            const files = fs.readdirSync(k8sDir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml')).sort();
+            for (const f of files) {
+              k8sManifests.push({
+                name: f,
+                content: fs.readFileSync(path.join(k8sDir, f), 'utf-8'),
+              });
+            }
+          }
+
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({ dockerRunning, containers, k8sManifests }));
+        });
       },
     },
   ],

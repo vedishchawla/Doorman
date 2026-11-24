@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doorman-proxy
+  namespace: doorman
+  labels:
+    app: doorman-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doorman-proxy
+  template:
+    metadata:
+      labels:
+        app: doorman-proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: proxy
+          image: doorman-proxy:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PROXY_LISTEN_ADDR
+              value: ":8080"
+            - name: OIDC_ISSUER_URL
+              value: http://keycloak.doorman.svc.cluster.local:8080/realms/zt
+            - name: OIDC_CLIENT_ID
+              value: zt-proxy
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: doorman-secrets
+                  key: OIDC_CLIENT_SECRET
+            - name: OIDC_REDIRECT_URL
+              value: https://localhost/auth/callback
+            - name: COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: doorman-secrets
+                  key: COOKIE_SECRET
+            - name: OPA_URL
+              value: http://opa.doorman.svc.cluster.local:8181
+            - name: BACKEND_A_URL
+              value: https://backend-a.doorman.svc.cluster.local:8080
+            - name: BACKEND_B_URL
+              value: https://backend-b.doorman.svc.cluster.local:8080
+            - name: POSTURE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: doorman-secrets
+                  key: POSTURE_PUBLIC_KEY
+            - name: AUDIT_LOG_FILE
+              value: /var/log/doorman/audit.jsonl
+            - name: MTLS_CA_FILE
+              value: /certs/ca.crt
+            - name: MTLS_CLIENT_CERT_FILE
+              value: /certs/proxy-client.crt
+            - name: MTLS_CLIENT_KEY_FILE
+              value: /certs/proxy-client.key
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          readinessProbe:
+            exec:
+              command: ["/proxy", "--healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["/proxy", "--healthcheck"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: mtls-certs
+              mountPath: /certs
+              readOnly: true
+            - name: audit-logs
+              mountPath: /var/log/doorman
+      volumes:
+        - name: mtls-certs
+          secret:
+            secretName: doorman-mtls-certs
+        - name: audit-logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doorman-proxy
+  namespace: doorman
+spec:
+  type: ClusterIP
+  selector:
+    app: doorman-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: doorman-proxy-hpa
+  namespace: doorman
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: doorman-proxy
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-a
+  namespace: doorman
+  labels:
+    app: backend-a
+    tier: workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-a
+  template:
+    metadata:
+      labels:
+        app: backend-a
+        tier: workload
+    spec:
+      containers:
+        - name: backend-a
+          image: doorman-backend:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKEND_NAME
+              value: backend-a
+            - name: MTLS_CA_FILE
+              value: /certs/ca.crt
+            - name: MTLS_CERT_FILE
+              value: /certs/backend-a.crt
+            - name: MTLS_KEY_FILE
+              value: /certs/backend-a.key
+          ports:
+            - containerPort: 8080
+              name: https-mtls
+          readinessProbe:
+            exec:
+              command: ["/backend", "healthcheck"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 150m
+              memory: 96Mi
+          volumeMounts:
+            - name: mtls-certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: mtls-certs
+          secret:
+            secretName: doorman-mtls-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-a
+  namespace: doorman
+spec:
+  type: ClusterIP
+  selector:
+    app: backend-a
+  ports:
+    - name: https-mtls
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-b
+  namespace: doorman
+  labels:
+    app: backend-b
+    tier: workload
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-b
+  template:
+    metadata:
+      labels:
+        app: backend-b
+        tier: workload
+    spec:
+      containers:
+        - name: backend-b
+          image: doorman-backend:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKEND_NAME
+              value: backend-b
+            - name: MTLS_CA_FILE
+              value: /certs/ca.crt
+            - name: MTLS_CERT_FILE
+              value: /certs/backend-b.crt
+            - name: MTLS_KEY_FILE
+              value: /certs/backend-b.key
+          ports:
+            - containerPort: 8080
+              name: https-mtls
+          readinessProbe:
+            exec:
+              command: ["/backend", "healthcheck"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 150m
+              memory: 96Mi
+          volumeMounts:
+            - name: mtls-certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: mtls-certs
+          secret:
+            secretName: doorman-mtls-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-b
+  namespace: doorman
+spec:
+  type: ClusterIP
+  selector:
+    app: backend-b
+  ports:
+    - name: https-mtls
+      port: 8080
+      targetPort: 8080

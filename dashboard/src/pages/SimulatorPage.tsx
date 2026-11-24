@@ -155,7 +155,7 @@ export const SimulatorPage: React.FC = () => {
       <div className="border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 font-mono uppercase tracking-wide">
-            1-Click Demo Scenarios (For Viva / Presentation)
+            1-Click Security Scenarios
           </span>
           <span className="text-[11px] text-neutral-500 font-mono">Click to test scenario instantly</span>
         </div>
@@ -510,7 +510,7 @@ export const SimulatorPage: React.FC = () => {
             Backend Architecture Deep Dive (How Every Major Component Works)
           </h2>
           <p className="text-[11px] text-neutral-500 font-mono mt-1">
-            Technical explanation of Go packages, cryptographic handshakes, and container topology for viva questions
+            Technical explanation of Go packages, cryptographic handshakes, and container topology
           </p>
         </div>
 

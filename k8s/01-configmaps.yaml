@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-policies
+  namespace: doorman
+data:
+  data.json: |
+    {
+      "allowed_countries": ["US", "IN", "GB", "DE", "CA"]
+    }
+  authz.rego: |
+    package zt.authz
+
+    import rego.v1
+
+    default allow := false
+
+    denials contains {"rule_id": "geo-blocked", "message": concat("", ["Denied: country ", input.geo, " is not in the allow list"])} if {
+    	not input.geo in data.allowed_countries
+    }
+
+    denials contains {"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"} if {
+    	input.device_posture.disk_encrypted == false
+    }
+
+    denials contains {"rule_id": "firewall-off", "message": "Denied: device is not compliant: firewall is not enabled"} if {
+    	input.device_posture.firewall_on == false
+    }
+
+    denials contains {"rule_id": "os-patch-stale", "message": concat("", ["Denied: OS patch age ", format_int(input.device_posture.os_patch_age_days, 10), " days exceeds 30 day limit"])} if {
+    	input.device_posture.os_patch_age_days > 30
+    }
+
+    denials contains {"rule_id": "viewer-time-restricted", "message": "Denied: viewer access outside business hours 09:00-19:00"} if {
+    	is_viewer
+    	not is_admin
+    	hour := to_number(split(input.time, ":")[0])
+    	not in_business_hours(hour)
+    }
+
+    denials contains {"rule_id": "viewer-method-denied", "message": concat("", ["Denied: viewer cannot use method ", input.method])} if {
+    	is_viewer
+    	not is_admin
+    	not input.method in {"GET", "HEAD", "OPTIONS"}
+    }
+
+    denials contains {"rule_id": "viewer-admin-path", "message": "Denied: viewer cannot access /admin paths"} if {
+    	is_viewer
+    	not is_admin
+    	startswith(input.resource, "/admin")
+    }
+
+    denials contains {"rule_id": "unknown-role", "message": "Denied: no recognized role (admin or viewer)"} if {
+    	not is_admin
+    	not is_viewer
+    }
+
+    allow if {
+    	count(denials) == 0
+    	role_granted
+    }
+
+    role_granted if { is_admin }
+    role_granted if {
+    	is_viewer
+    	not is_admin
+    	input.method in {"GET", "HEAD", "OPTIONS"}
+    	not startswith(input.resource, "/admin")
+    }
+
+    is_admin if { some role in input.roles; role == "admin" }
+    is_viewer if { some role in input.roles; role == "viewer" }
+    in_business_hours(hour) if { hour >= 9; hour < 19 }
+
+    sorted_denials := sort(denials)
+    reason := sorted_denials[0].message if { count(sorted_denials) > 0 }
+    reason := "" if { count(sorted_denials) == 0 }
+    policy_id := sorted_denials[0].rule_id if { count(sorted_denials) > 0 }
+    policy_id := "" if { count(sorted_denials) == 0 }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: doorman
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+    http {
+        upstream backend {
+            server doorman-proxy.doorman.svc.cluster.local:8080;
+        }
+        server {
+            listen 443 ssl;
+            server_name localhost;
+            ssl_certificate     /etc/nginx/certs/server.crt;
+            ssl_certificate_key /etc/nginx/certs/server.key;
+            ssl_protocols       TLSv1.2 TLSv1.3;
+            ssl_ciphers         HIGH:!aNULL:!MD5;
+            location / {
+                proxy_pass http://backend;
+                proxy_set_header Host              $host;
+                proxy_set_header X-Real-IP         $remote_addr;
+                proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+    }

@@ -1,4 +1,4 @@
-import { AuditEntry, PolicyInput, PolicyEvaluationResult, BenchmarkRow, SimulationResult } from './types';
+import { AuditEntry, PolicyInput, PolicyEvaluationResult, BenchmarkRow, SimulationResult, InfraStatus } from './types';
 
 // Fallback audit entries if server has no log file
 export const SAMPLE_AUDIT_ENTRIES: AuditEntry[] = [
@@ -515,5 +515,105 @@ export async function dispatchLiveRequest(params: {
       cipherSuite: 'TLS_AES_128_GCM_SHA256'
     },
     total_ms: 2.15,
+  };
+}
+
+export const DEFAULT_REGO_SOURCE = `package zt.authz
+
+import rego.v1
+
+default allow := false
+
+# Geo-blocking: country must be in the allow list
+denials contains {"rule_id": "geo-blocked", "message": concat("", ["Denied: country ", input.geo, " is not in the allow list"])} if {
+\tnot input.geo in data.allowed_countries
+}
+
+# Device posture: disk must be encrypted
+denials contains {"rule_id": "disk-not-encrypted", "message": "Denied: device is not compliant: disk is not encrypted"} if {
+\tinput.device_posture.disk_encrypted == false
+}
+
+# Device posture: firewall must be enabled
+denials contains {"rule_id": "firewall-off", "message": "Denied: device is not compliant: firewall is not enabled"} if {
+\tinput.device_posture.firewall_on == false
+}
+
+# Device posture: OS patch age must be <= 30 days
+denials contains {"rule_id": "os-patch-stale", "message": concat("", ["Denied: OS patch age ", format_int(input.device_posture.os_patch_age_days, 10), " days exceeds 30 day limit"])} if {
+\tinput.device_posture.os_patch_age_days > 30
+}
+
+# Viewer: denied outside business hours (09:00-19:00)
+denials contains {"rule_id": "viewer-time-restricted", "message": "Denied: viewer access outside business hours 09:00-19:00"} if {
+\tis_viewer
+\tnot is_admin
+\thour := to_number(split(input.time, ":")[0])
+\tnot in_business_hours(hour)
+}
+
+# Viewer: read-only methods only
+denials contains {"rule_id": "viewer-method-denied", "message": concat("", ["Denied: viewer cannot use method ", input.method])} if {
+\tis_viewer
+\tnot is_admin
+\tnot input.method in {"GET", "HEAD", "OPTIONS"}
+}
+
+# Viewer: denied access to /admin paths
+denials contains {"rule_id": "viewer-admin-path", "message": "Denied: viewer cannot access /admin paths"} if {
+\tis_viewer
+\tnot is_admin
+\tstartswith(input.resource, "/admin")
+}
+
+# Unknown role: no recognized role found
+denials contains {"rule_id": "unknown-role", "message": "Denied: no recognized role (admin or viewer)"} if {
+\tnot is_admin
+\tnot is_viewer
+}
+
+allow if {
+\tcount(denials) == 0
+\trole_granted
+}`;
+
+export async function fetchRegoSource(): Promise<string> {
+  try {
+    const res = await fetch('/api/rego');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data.source === 'string' && data.source.trim().length > 0) {
+        return data.source;
+      }
+    }
+  } catch {
+    // fallback to embedded Rego source
+  }
+  return DEFAULT_REGO_SOURCE;
+}
+
+export async function fetchInfraStatus(): Promise<InfraStatus> {
+  try {
+    const res = await fetch('/api/infra');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.containers)) {
+        return data as InfraStatus;
+      }
+    }
+  } catch {
+    // fallback to static architecture spec
+  }
+  return {
+    dockerRunning: false,
+    containers: [
+      { name: 'devops-project-nginx-1', service: 'nginx', state: 'standby', health: 'edge-tls', ports: '443/tcp' },
+      { name: 'devops-project-proxy-1', service: 'proxy', state: 'standby', health: 'go-1.22', ports: '8080, 9090' },
+      { name: 'devops-project-keycloak-1', service: 'keycloak', state: 'standby', health: 'oidc-rs256', ports: '8080, 9000' },
+      { name: 'devops-project-opa-1', service: 'opa', state: 'standby', health: 'rego-0.70', ports: '8181/tcp' },
+      { name: 'devops-project-backend-a-1', service: 'backend-a', state: 'standby', health: 'mtls-echo', ports: '8080 (internal)' },
+      { name: 'devops-project-backend-b-1', service: 'backend-b', state: 'standby', health: 'mtls-echo', ports: '8080 (internal)' },
+    ],
+    k8sManifests: [],
   };
 }
